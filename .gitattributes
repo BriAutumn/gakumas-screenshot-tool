@@ -1,0 +1,3 @@
+# Preserve exact source bytes: catalog/model/fixture manifests pin SHA-256.
+# Do not silently rewrite LF/CRLF during add or checkout.
+* -text

@@ -1,0 +1,1 @@
+{"name":"gkshot-local-engine","private":true,"type":"module","engines":{"node":">=24"},"scripts":{"test:upstream":"node --no-warnings --loader ./upstream/scripts/extensionless-loader.mjs ./upstream/tests/run.mjs"}}

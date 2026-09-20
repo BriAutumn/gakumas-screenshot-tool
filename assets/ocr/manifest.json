@@ -1,0 +1,14 @@
+{
+  "provider": "RapidAI/RapidOCR",
+  "release": "v3.9.2",
+  "files": {
+    "japan_PP-OCRv4_rec_mobile.onnx": {
+      "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv4/rec/japan_PP-OCRv4_rec_mobile.onnx",
+      "sha256": "e1075a67dba758ecfc7ebc78a10ae61c95ac8fb66a9c86fab5541e33f085cb7a"
+    },
+    "LICENSE-RapidOCR": {
+      "url": "https://raw.githubusercontent.com/RapidAI/RapidOCR/main/LICENSE",
+      "sha256": "3e0af25fdd06aa9586ae97adb00ea927ebe5a3805ac77d2d3a81ce5f55693333"
+    }
+  }
+}

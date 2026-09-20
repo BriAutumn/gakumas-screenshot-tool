@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "PC 竖版 memory 列表（样例布局）",
+  "window_title": "gakumas",
+  "list_region": [0.035, 0.33, 0.965, 0.65],
+  "list_scrollbar": [0.969, 0.34, 0.983, 0.637],
+  "open_detail": [0.50, 0.845],
+  "list_scroll": [0.91, 0.53],
+  "stage_tab": [0.69, 0.485],
+  "detail_scroll": [0.93, 0.68],
+  "dismiss_tooltip": [0.83, 0.86],
+  "back": [0.414, 0.952],
+  "settle_seconds": 0.65,
+  "stable_timeout": 10,
+  "max_scroll_steps": 80,
+  "tooltip_retries": 2,
+  "list_match_tolerance": 9,
+  "stage_region": [0.50, 0.455, 0.88, 0.505],
+  "list_button_region": [0.30, 0.79, 0.69, 0.88],
+  "header_region": [0.025, 0.368, 0.50, 0.442],
+  "detail_region": [0.03, 0.515, 0.97, 0.91]
+}

@@ -1,0 +1,13 @@
+# Versions exercised together on Windows / Python 3.13.
+numpy==2.5.3
+pillow==12.3.0
+onnxruntime==1.30.0
+rapidocr-onnxruntime==1.2.3
+opencv-python==5.0.0.93
+PyYAML==6.0.3
+Shapely==2.1.2
+pyclipper==1.4.0
+six==1.17.0
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.2

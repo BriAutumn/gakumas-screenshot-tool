@@ -1,0 +1,35 @@
+{
+  "repository": "surisuririsu/gakumas-tools",
+  "revision": "7153b0775c654d58c7b8a17b3a598322a35d0b2a",
+  "change": "Only explicit .js import extensions for Node ESM.",
+  "files": {
+    "parser\\index.js": {
+      "upstream_sha256": "b60bf115c24b229d20b770fc06a94709b179bdfe49df783aee4a46c8aa3b169e",
+      "local_sha256": "9c04945780bdfe7189d7d2a7490b76ef46ac1b15a05a2b75bb0b9a87a250a941"
+    },
+    "parser\\parser.js": {
+      "upstream_sha256": "13d7c2a73682f27c8157fde17f4b8ffe830196b9a2735febc8b0850c643ab882",
+      "local_sha256": "8c6e4ad7accd1272f285cbfa9e975a0fea1309a4b94ffba94c98953a5269c08f"
+    },
+    "parser\\tokenizer.js": {
+      "upstream_sha256": "39bdfa5e59309717853cc88ea246ae00bfb90d957183114d3021d0cb3fd27f27",
+      "local_sha256": "8f143d981ea0488d84fc45861893b6fa6ea699c4a2728eddde4566f9741a5c13"
+    },
+    "parser\\tokens.js": {
+      "upstream_sha256": "362e3b9ef939c41e20368d05c775f3e0988f76c18d088a96b24653eaef79741b",
+      "local_sha256": "aac316b2b08c0d5a0d321b0bfc9bbfc50be6e8657ace52040555f36936caf810"
+    },
+    "transformer\\index.js": {
+      "upstream_sha256": "b020eb865c0b9723d2bf60be3b0d1966722d0b06fca0c43d0590ab3fd9c183bb",
+      "local_sha256": "cc8eeefefe7210c730815ffa0db347b932e946cd507bdcc77ddc230a3f5b1e56"
+    },
+    "transformer\\serialize.js": {
+      "upstream_sha256": "65e076dd6ad1580cecae5bdc0c5b5805b33fabf08c4989860de84fb7e7509720",
+      "local_sha256": "7cadeac21de2e544896e13cfc8ad016f0121560fe7e578231a8ea2be6cc4e75b"
+    },
+    "transformer\\transform.js": {
+      "upstream_sha256": "aa678623aa77fd7eb43f093f70a1a981bfdd1ab24078714e553a876acde86fb6",
+      "local_sha256": "1ae5ad1e64c072379f535029c7b0bdece7140a77f1d20d8e45ea76f9abe01bd5"
+    }
+  }
+}
