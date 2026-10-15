@@ -1,15 +1,46 @@
-# 本地原生 GKTools 引擎
+# 本地原生 GKTools 引擎（runtime/node）
 
-已接通。引擎与数据固定为 `7153b0775c654d58c7b8a17b3a598322a35d0b2a`，74 个上游文件逐字节保留，BSD-3-Clause 许可在 `upstream/LICENSE`。`manifest.json` 记录全部 SHA-256；归档内容另已与该提交的 Git blob ID 核对。
+`runtime/node/` 保存随工具附带的固定上游引擎与目录，供 Python 通过行 JSON 协议以子进程方式调用。
 
-环境：Node.js 24（实测 24.16.0）和项目 Python。引擎本身是 JavaScript ESM，只依赖同仓库 gakumas-data；没有 npm 包下载、TS 编译、网页构建或联网运行依赖。使用原上游 `scripts/extensionless-loader.mjs` 处理省略扩展名和 JSON 导入。识图不受影响。
+## 来源与版本
 
-仓库已包含运行文件，通常不需要安装。如果恢复文件，可运行 `python runtime/node/install.py <已验证的upstream.zip>`；安装器固定归档 SHA-256，拒绝未知归档及覆盖修改过的文件。它不是自动更新器。
+- 固定上游提交 `9ff4610011feb395e363d86d7c961e4da68b6deb`，仓库 [surisuririsu/gakumas-tools](https://github.com/surisuririsu/gakumas-tools)（现由 [gakumas-tools/gakumas-tools](https://github.com/gakumas-tools/gakumas-tools) 维护）。
+- `manifest.json` 的 `revision` 记录该提交，`files` 逐文件记录 SHA-256；`upstream/` 下的上游文件由 `manifest.json` 列出并逐字节保留。
+- 上游 BSD-3-Clause 许可原文保存在 `upstream/LICENSE`。
 
-运行：根目录 `launch-simulation.cmd`，或 `python simulate.py compare examples/simulation/original.loadout.json --trials 1000`。详细说明在 `docs/simulation.md`。
+## 目录内容
 
-协议 v1：stdin/stdout 逐行 JSON；日志只写 stderr。请求包含 `protocol_version/request_id/loadout/trials/seed`。响应依次为 `type=progress`，最后 `type=result` 或 `type=error`。成功结果包含每次真实分数、次数、种子、RNG 调用数、引擎/数据版本、Node 版本及实际生效配置。Python 每候选使用独立进程，检查版本与文件完整性；取消或超时会终止 worker，不缓存半成品。
+- `manifest.json`、`package.json`、`worker.mjs`、`reference.mjs` 为本地文件。
+- `upstream/` 为上游引擎与数据（`packages/gakumas-engine`、`packages/gakumas-data`、`gakumas-tools/` 片段、`scripts/extensionless-loader.mjs`、`tests/`）。
+- 引擎是 JavaScript ESM，只依赖同仓库的 `gakumas-data`；没有 npm 包下载、TS 编译、网页构建或联网运行依赖。省略扩展名与 JSON 导入由上游 `scripts/extensionless-loader.mjs` 处理。
 
-随机数：原引擎生产默认使用 Math.random；显式 `resetRand(uint32)` 才切换为原生 mulberry32。每个候选开始时设种子，此后连续运行 N 次，不能每次重设成同一个种子。同版本、同输入、同 Node 和同种子可复现；不同候选消耗随机数的数量可能不同，不声称逐次抽牌配对。
+## Node 运行时
 
-验收：`node --no-warnings --loader ./runtime/node/upstream/scripts/extensionless-loader.mjs ./runtime/node/upstream/tests/run.mjs`（524 个上游冻结样例）；`python -m unittest discover -s tests -p test_simulation.py -v`（Python桥接、独立参考、统计、缓存、取消等）。`reference.mjs` 使用原上游 URL 解析器直接调用引擎，不导入 worker 的映射逻辑。
+环境为 Node.js 24（固定 24.16.0）。为避免提交约 92 MB 的二进制，`runtime/node-bin/node.exe` 不纳入 Git；`runtime/node-bin/LICENSE` 是随仓库保留的 Node 许可文件。
+
+在仓库根目录运行：
+
+```text
+python tools/prepare_node.py
+```
+
+它会从固定官方地址 `https://nodejs.org/dist/v24.16.0/node-v24.16.0-win-x64.zip` 获取归档（或用 `--archive PATH` 指定已下载的官方压缩包），先校验整包 SHA-256，再只解出成员 `node-v24.16.0-win-x64/node.exe` 与 `node-v24.16.0-win-x64/LICENSE` 到 `runtime/node-bin`。已存在且校验一致时为空操作，不会联网；已存在但哈希不符时会拒绝覆盖。
+
+## 入口与协议
+
+- Python 侧入口是 `packaging/entry.py`（打包后为 `GKMemoryTool.exe`），它调用 `gkshot.adapters.local_engine.LocalSimulator` 启动本引擎。
+- `worker.mjs` 是实际工作进程：stdin/stdout 逐行 JSON，日志只写 stderr。请求包含 `protocol_version / request_id / loadout / trials / seed`；响应依次为 `type=progress`，最后是 `type=result` 或 `type=error`。`worker.mjs` 启动时会按 `manifest.json` 校验全部上游文件哈希。
+- `reference.mjs` 使用上游 URL 解析器与引擎入口直接调用引擎，用作独立对照（worker / reference 冒烟对比），不导入 worker 的映射逻辑。
+- Python 每候选使用独立或持久化的进程，检查版本与文件完整性；取消或超时会终止 worker，不缓存半成品。
+
+## 数据同步
+
+引擎、目录、图标与原生映射由 `gkshot/data_updates.py` 直接从公开上游提交同步：拉取显式修订、校验 Git blob 校验和与大小、构建原生映射，并通过上游回归测试与 worker/reference 冒烟对比后才原子激活到 `runtime/releases/<revision>`；运行进程在生命周期内固定使用自己启动时的版本。同步不需要重新打包 EXE，也不再使用旧版 `install.py`。
+
+## 校验
+
+```text
+node --no-warnings --loader ./runtime/node/upstream/scripts/extensionless-loader.mjs ./runtime/node/upstream/tests/run.mjs
+```
+
+上游 `tests/` 为冻结样例，不需要私有素材即可运行。

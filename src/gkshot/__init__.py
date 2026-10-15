@@ -1,1 +1,1 @@
-"""Small, replaceable layers for screenshot-based contest loadouts."""
+"""Native memory export and local contest simulation tools."""
