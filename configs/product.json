@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product": "gk-memory-tool",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "display_name": "学マス回忆工具",
   "release_repository": "BriAutumn/gakumas-screenshot-tool",
   "release_tag_prefix": "memory-tool-",

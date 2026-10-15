@@ -1,10 +1,20 @@
 """Installation manager for the native memory-export plugin.
 
-The plugin is a proxy ``version.dll`` that the game loads, plus a small
-``GKMemoryExport.ini`` file telling it where to write snapshots.  This
-module owns *only* files it installed: the bundled proxy DLL, the config
-file it generated, and a per-game installation receipt under
-``user_home/plugin-installations``.
+The plugin ships a proxy DLL that the game loads, plus a small
+``GKMemoryExport.ini`` file telling it where to write snapshots.  Two backend
+DLL names are supported:
+
+* ``version.dll`` -- the legacy/default proxy name;
+* ``winhttp.dll`` -- an independent alternate backend used for coexistence
+  when a third-party ``version.dll`` (for example Gakumas Localify) already
+  occupies the default slot.
+
+This module owns *only* files it installed: the selected proxy DLL, the
+config file it generated, and a per-game installation receipt under
+``user_home/plugin-installations``.  Foreign DLLs are never overwritten or
+backed up: when the default ``version.dll`` slot is taken by another tool the
+alternate ``winhttp.dll`` backend is installed instead, and if both slots are
+occupied the operation is refused without touching anything.
 
 Safety rules implemented here:
 
@@ -13,14 +23,14 @@ Safety rules implemented here:
   rejected;
 * while ``gakumas.exe`` is running (checked via ``tasklist`` with
   ``CREATE_NO_WINDOW``) *all* mutation is refused;
-* an existing ``version.dll`` may only be replaced when it is exactly the
-  bundled hash, a hash recorded by one of *our* receipts, or the known
-  prototype hash;
+* a foreign (not-owned) ``version.dll``/``winhttp.dll`` is preserved
+  byte-identically; ownership is scoped to a specific file name so a hash
+  recorded for one backend never makes the other backend look owned;
 * an existing ``GKMemoryExport.ini`` may only be replaced when it is
   byte-identical to the config we generate or was recorded by our receipt;
 * previous owned files are backed up under ``user_home`` and the new files
-  are staged next to their targets and swapped in atomically; both files
-  are restored if any step fails.
+  are staged next to their targets and swapped in atomically; both the DLL
+  and the config are restored if any step fails.
 
 The module never elevates privileges: a ``PermissionError`` from the OS
 bubbles up to the caller unchanged.
@@ -46,7 +56,11 @@ __all__ = [
     "KNOWN_PROTOTYPE_SHA256",
 ]
 
-DLL_NAME = "version.dll"
+VERSION_DLL_NAME = "version.dll"
+WINHTTP_DLL_NAME = "winhttp.dll"
+# Legacy alias: the default proxy name is still ``version.dll``.
+DLL_NAME = VERSION_DLL_NAME
+KNOWN_DLL_NAMES = (VERSION_DLL_NAME, WINHTTP_DLL_NAME)
 GAME_EXE = "gakumas.exe"
 MANIFEST_NAME = "plugin.json"
 CONFIG_NAME = "GKMemoryExport.ini"
@@ -59,6 +73,7 @@ RECEIPT_SCHEMA_VERSION = 1
 
 # Hash of the previously shipped prototype proxy.  It is treated as owned so
 # that an upgrade can replace it, but it is never mistaken for a foreign DLL.
+# It only ever applies to the legacy ``version.dll`` name.
 KNOWN_PROTOTYPE_SHA256 = (
     "4c7cd711ef3ed0f92e4d1def1be54bd1e19076eaf92d600f3cfa52111ded70af"
 )
@@ -87,10 +102,24 @@ class GameRunningError(PluginError):
 
 @dataclass(frozen=True)
 class Bundle:
-    """A validated bundled plugin."""
+    """A validated bundled plugin.
+
+    ``sha256`` is always the ``version.dll`` hash declared at the top level of
+    ``plugin.json`` (schema 1).  ``winhttp_sha256`` is only set when the
+    manifest carries an optional ``files`` map that includes a verified
+    ``winhttp.dll`` alternate backend.
+    """
 
     version: str
     sha256: str
+    winhttp_sha256: str | None = None
+
+    @property
+    def has_alternate(self) -> bool:
+        return self.winhttp_sha256 is not None
+
+    def expected_sha(self, name: str) -> str | None:
+        return self.winhttp_sha256 if name == WINHTTP_DLL_NAME else self.sha256
 
 
 # ---------------------------------------------------------------------------
@@ -164,52 +193,84 @@ class PluginManager:
         game_root = self._resolve_game_dir(game_dir)
         bundle = self._load_bundle()
 
-        dll_path = game_root / DLL_NAME
+        version_path = game_root / VERSION_DLL_NAME
+        winhttp_path = game_root / WINHTTP_DLL_NAME
         cfg_path = game_root / CONFIG_NAME
-        self._assert_managed_file(dll_path, game_root)
+        self._assert_managed_file(version_path, game_root)
+        self._assert_managed_file(winhttp_path, game_root)
         self._assert_managed_file(cfg_path, game_root)
 
         receipt_path = self._receipt_path(game_root)
         receipt = self._read_receipt(receipt_path)
 
-        dll_present = dll_path.is_file()
-        dll_sha = _sha256_file(dll_path) if dll_present else None
+        version_present = version_path.is_file()
+        version_sha = _sha256_file(version_path) if version_present else None
+        winhttp_present = winhttp_path.is_file()
+        winhttp_sha = _sha256_file(winhttp_path) if winhttp_present else None
         cfg_present = cfg_path.is_file()
         cfg_sha = _sha256_file(cfg_path) if cfg_present else None
         expected_cfg_sha = _sha256_bytes(self._config_bytes())
 
-        dll_owned = dll_present and self._dll_is_owned(dll_sha, bundle, receipt)
+        version_owned = self._dll_owned(
+            VERSION_DLL_NAME, version_sha, bundle, receipt
+        )
+        winhttp_owned = self._dll_owned(
+            WINHTTP_DLL_NAME, winhttp_sha, bundle, receipt
+        )
         cfg_owned = cfg_present and self._cfg_is_owned(
             cfg_sha, expected_cfg_sha, receipt
         )
-        conflicts = []
-        if dll_present and not dll_owned:
-            conflicts.append(DLL_NAME)
-        if cfg_present and not cfg_owned:
-            conflicts.append(CONFIG_NAME)
 
-        cfg_ok = (not cfg_present) or cfg_owned
-        if not dll_present and not cfg_present:
+        analysis = self._analyze_selection(
+            bundle, version_sha, version_owned, winhttp_sha, winhttp_owned
+        )
+        selected = analysis["selected"]
+        conflicts = list(analysis["conflicts"])
+
+        if analysis["blocked"]:
+            state = "conflict"
+        elif not version_present and not winhttp_present and not cfg_present:
             state = "not_installed"
-        elif dll_present and dll_sha == bundle.sha256 and cfg_sha == expected_cfg_sha:
-            state = "installed"
         elif (
-            dll_present
-            and dll_sha == KNOWN_PROTOTYPE_SHA256
+            version_present
+            and version_sha == KNOWN_PROTOTYPE_SHA256
             and not cfg_present
         ):
             state = "prototype"
-        elif dll_present and dll_owned and cfg_ok:
-            state = "update_available"
         else:
-            state = "conflict"
+            expected = bundle.expected_sha(selected)
+            present = (
+                version_present
+                if selected == VERSION_DLL_NAME
+                else winhttp_present
+            )
+            sha = version_sha if selected == VERSION_DLL_NAME else winhttp_sha
+            owned = self._dll_owned(selected, sha, bundle, receipt)
+            if present and sha == expected and cfg_sha == expected_cfg_sha:
+                state = "installed"
+            elif present and owned and (not cfg_present or cfg_owned):
+                state = "update_available"
+            elif not present:
+                state = "not_installed"
+            else:
+                state = "conflict"
+                if selected not in conflicts:
+                    conflicts.append(selected)
 
-        result = self._result(bundle, game_root, changed=False, state=state)
+        if cfg_present and not cfg_owned:
+            state = "conflict"
+            if CONFIG_NAME not in conflicts:
+                conflicts.append(CONFIG_NAME)
+        result = self._result(
+            bundle, game_root, changed=False, state=state, dll_name=selected
+        )
         result.update(
             {
                 "running": self._is_running(),
-                "dll_present": dll_present,
-                "dll_sha256": dll_sha,
+                "dll_present": version_present,
+                "dll_sha256": version_sha,
+                "winhttp_present": winhttp_present,
+                "winhttp_sha256": winhttp_sha,
                 "config_present": cfg_present,
                 "config_sha256": cfg_sha,
                 "receipt": str(receipt_path) if receipt is not None else None,
@@ -224,9 +285,11 @@ class PluginManager:
         if self._is_running():
             raise GameRunningError()
 
-        dll_path = game_root / DLL_NAME
+        version_path = game_root / VERSION_DLL_NAME
+        winhttp_path = game_root / WINHTTP_DLL_NAME
         cfg_path = game_root / CONFIG_NAME
-        self._assert_managed_file(dll_path, game_root)
+        self._assert_managed_file(version_path, game_root)
+        self._assert_managed_file(winhttp_path, game_root)
         self._assert_managed_file(cfg_path, game_root)
 
         receipt_path = self._receipt_path(game_root)
@@ -235,28 +298,45 @@ class PluginManager:
         expected_cfg = self._config_bytes()
         expected_cfg_sha = _sha256_bytes(expected_cfg)
 
-        original_dll = dll_path.read_bytes() if dll_path.is_file() else None
-        original_cfg = cfg_path.read_bytes() if cfg_path.is_file() else None
-        existing_dll_sha = (
-            _sha256_bytes(original_dll) if original_dll is not None else None
+        version_bytes = version_path.read_bytes() if version_path.is_file() else None
+        winhttp_bytes = winhttp_path.read_bytes() if winhttp_path.is_file() else None
+        cfg_bytes = cfg_path.read_bytes() if cfg_path.is_file() else None
+        version_sha = (
+            _sha256_bytes(version_bytes) if version_bytes is not None else None
         )
-        existing_cfg_sha = (
-            _sha256_bytes(original_cfg) if original_cfg is not None else None
+        winhttp_sha = (
+            _sha256_bytes(winhttp_bytes) if winhttp_bytes is not None else None
+        )
+        cfg_sha = _sha256_bytes(cfg_bytes) if cfg_bytes is not None else None
+
+        version_owned = self._dll_owned(
+            VERSION_DLL_NAME, version_sha, bundle, receipt
+        )
+        winhttp_owned = self._dll_owned(
+            WINHTTP_DLL_NAME, winhttp_sha, bundle, receipt
         )
 
-        dll_owned = existing_dll_sha is None or self._dll_is_owned(
-            existing_dll_sha, bundle, receipt
+        analysis = self._analyze_selection(
+            bundle, version_sha, version_owned, winhttp_sha, winhttp_owned
         )
-        cfg_owned = existing_cfg_sha is None or self._cfg_is_owned(
-            existing_cfg_sha, expected_cfg_sha, receipt
-        )
-        if not dll_owned:
+        if analysis["blocked"]:
+            self._raise_conflict(analysis, game_root)
+        target_name = analysis["selected"]
+        target_expected_sha = bundle.expected_sha(target_name)
+        if target_expected_sha is None:
             raise PluginError(
-                "游戏目录中已存在非本工具安装的 version.dll，已拒绝覆盖：%s"
-                % dll_path,
-                state="conflict",
+                "插件包缺少所选后端 %s 的校验哈希" % target_name, state="conflict"
             )
-        if not cfg_owned:
+
+        target_path = game_root / target_name
+        target_bytes = (
+            version_bytes if target_name == VERSION_DLL_NAME else winhttp_bytes
+        )
+        target_sha = version_sha if target_name == VERSION_DLL_NAME else winhttp_sha
+
+        if cfg_bytes is not None and not self._cfg_is_owned(
+            cfg_sha, expected_cfg_sha, receipt
+        ):
             raise PluginError(
                 "游戏目录中已存在非本工具生成的 GKMemoryExport.ini，已拒绝覆盖：%s"
                 % cfg_path,
@@ -264,37 +344,46 @@ class PluginManager:
             )
 
         already = (
-            existing_dll_sha == bundle.sha256
-            and existing_cfg_sha == expected_cfg_sha
-            and receipt is not None
-            and receipt.get("dll_sha256") == bundle.sha256
-            and receipt.get("config_sha256") == expected_cfg_sha
+            target_sha == target_expected_sha
+            and cfg_sha == expected_cfg_sha
+            and self._receipt_matches(
+                receipt, target_name, target_expected_sha, expected_cfg_sha
+            )
         )
         if already:
-            return self._result(bundle, game_root, changed=False, state="installed")
+            result = self._result(
+                bundle, game_root, changed=False, state="installed",
+                dll_name=target_name,
+            )
+            result.update(
+                {"dll_sha256": target_expected_sha, "receipt": str(receipt_path)}
+            )
+            return result
 
-        # Back up any owned files we are about to replace.
+        # Back up any owned files we are about to replace.  Foreign DLLs and
+        # foreign configs are never part of this set.
         backup_items = []
-        if original_dll is not None:
-            backup_items.append((dll_path, original_dll))
-        if original_cfg is not None:
-            backup_items.append((cfg_path, original_cfg))
+        if target_bytes is not None:
+            backup_items.append((target_path, target_bytes))
+        if cfg_bytes is not None:
+            backup_items.append((cfg_path, cfg_bytes))
         self._backup_owned(game_root, backup_items)
 
         staged = []
         try:
             staged_dll = self._stage_file(
-                game_root, (self.bundle_dir / DLL_NAME).read_bytes()
+                game_root, (self.bundle_dir / target_name).read_bytes()
             )
             staged.append(staged_dll)
             staged_cfg = self._stage_file(game_root, expected_cfg)
             staged.append(staged_cfg)
-            os.replace(staged_dll, dll_path)
+            os.replace(staged_dll, target_path)
             os.replace(staged_cfg, cfg_path)
             self._write_receipt(receipt_path, {
                 'schema_version': RECEIPT_SCHEMA_VERSION,
                 'game_dir': str(game_root), 'version': bundle.version,
-                'dll_sha256': bundle.sha256, 'config_sha256': expected_cfg_sha,
+                'dll_name': target_name, 'dll_sha256': target_expected_sha,
+                'config_sha256': expected_cfg_sha,
                 'export_dir': str(self.export_dir), 'installed_at': _now_iso(),
             })
         except BaseException:
@@ -303,14 +392,17 @@ class PluginManager:
                     path.unlink()
                 except FileNotFoundError:
                     pass
-            self._restore_file(dll_path, original_dll)
-            self._restore_file(cfg_path, original_cfg)
+            self._restore_file(target_path, target_bytes)
+            self._restore_file(cfg_path, cfg_bytes)
             raise
 
-        result = self._result(bundle, game_root, changed=True, state="installed")
+        result = self._result(
+            bundle, game_root, changed=True, state="installed",
+            dll_name=target_name,
+        )
         result.update(
             {
-                "dll_sha256": bundle.sha256,
+                "dll_sha256": target_expected_sha,
                 "receipt": str(receipt_path),
             }
         )
@@ -322,33 +414,51 @@ class PluginManager:
         if self._is_running():
             raise GameRunningError()
 
-        dll_path = game_root / DLL_NAME
+        version_path = game_root / VERSION_DLL_NAME
+        winhttp_path = game_root / WINHTTP_DLL_NAME
         cfg_path = game_root / CONFIG_NAME
-        self._assert_managed_file(dll_path, game_root)
+        self._assert_managed_file(version_path, game_root)
+        self._assert_managed_file(winhttp_path, game_root)
         self._assert_managed_file(cfg_path, game_root)
 
         receipt_path = self._receipt_path(game_root)
         receipt = self._read_receipt(receipt_path)
 
         expected_cfg_sha = _sha256_bytes(self._config_bytes())
-        owned_dll_hashes = {bundle.sha256, KNOWN_PROTOTYPE_SHA256}
-        if receipt and _looks_like_sha256(receipt.get("dll_sha256")):
-            owned_dll_hashes.add(receipt["dll_sha256"])
-        owned_cfg_hashes = {expected_cfg_sha}
-        if receipt and _looks_like_sha256(receipt.get("config_sha256")):
-            owned_cfg_hashes.add(receipt["config_sha256"])
 
-        dll_present = dll_path.is_file()
-        dll_sha = _sha256_file(dll_path) if dll_present else None
+        version_present = version_path.is_file()
+        version_sha = _sha256_file(version_path) if version_present else None
+        winhttp_present = winhttp_path.is_file()
+        winhttp_sha = _sha256_file(winhttp_path) if winhttp_present else None
         cfg_present = cfg_path.is_file()
         cfg_sha = _sha256_file(cfg_path) if cfg_present else None
 
-        remove_dll = dll_present and dll_sha in owned_dll_hashes
-        remove_cfg = cfg_present and cfg_sha in owned_cfg_hashes
+        version_owned = self._dll_owned(
+            VERSION_DLL_NAME, version_sha, bundle, receipt
+        )
+        winhttp_owned = self._dll_owned(
+            WINHTTP_DLL_NAME, winhttp_sha, bundle, receipt
+        )
+
+        # Only the backend we installed is considered; a third-party DLL in the
+        # other slot is intentionally preserved and never marked as a conflict.
+        primary = self._uninstall_primary(
+            receipt, version_sha, version_owned, winhttp_sha, winhttp_owned
+        )
+        primary_path = game_root / primary
+        primary_present = (
+            version_present if primary == VERSION_DLL_NAME else winhttp_present
+        )
+        primary_sha = version_sha if primary == VERSION_DLL_NAME else winhttp_sha
+        primary_owned = self._dll_owned(primary, primary_sha, bundle, receipt)
+        remove_dll = primary_present and primary_owned
+        remove_cfg = cfg_present and self._cfg_is_owned(
+            cfg_sha, expected_cfg_sha, receipt
+        )
 
         conflicts = []
-        if dll_present and not remove_dll:
-            conflicts.append(DLL_NAME)
+        if primary_present and not remove_dll:
+            conflicts.append(primary)
         if cfg_present and not remove_cfg:
             conflicts.append(CONFIG_NAME)
 
@@ -356,8 +466,8 @@ class PluginManager:
         try:
             if remove_dll:
                 backup = self._unique_adjacent(game_root)
-                os.replace(dll_path, backup)
-                moved.append((backup, dll_path))
+                os.replace(primary_path, backup)
+                moved.append((backup, primary_path))
             if remove_cfg:
                 backup = self._unique_adjacent(game_root)
                 os.replace(cfg_path, backup)
@@ -373,20 +483,25 @@ class PluginManager:
             except FileNotFoundError:
                 pass
 
+        # Keep the receipt whenever our DLL was not removed: it is the recovery
+        # evidence for any owned leftovers (for example a replaced backend).
         if remove_dll and receipt_path.is_file():
             receipt_path.unlink()
 
         removed = []
         if remove_dll:
-            removed.append(DLL_NAME)
+            removed.append(primary)
         if remove_cfg:
             removed.append(CONFIG_NAME)
 
         state = "conflict" if conflicts else "not_installed"
-        result = self._result(bundle, game_root, changed=bool(moved), state=state)
+        result = self._result(
+            bundle, game_root, changed=bool(moved), state=state, dll_name=primary
+        )
         result.update(
             {
-                "dll_present": dll_path.is_file(),
+                "dll_present": version_path.is_file(),
+                "winhttp_present": winhttp_path.is_file(),
                 "config_present": cfg_path.is_file(),
                 "conflicts": conflicts,
                 "removed": removed,
@@ -398,11 +513,11 @@ class PluginManager:
 
     def _load_bundle(self) -> Bundle:
         manifest_path = self.bundle_dir / MANIFEST_NAME
-        dll_path = self.bundle_dir / DLL_NAME
+        version_path = self.bundle_dir / VERSION_DLL_NAME
         if not manifest_path.is_file():
             raise PluginError("插件包不完整：缺少 %s" % manifest_path)
-        if not dll_path.is_file():
-            raise PluginError("插件包不完整：缺少 %s" % dll_path)
+        if not version_path.is_file():
+            raise PluginError("插件包不完整：缺少 %s" % version_path)
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as error:
@@ -420,12 +535,47 @@ class PluginManager:
         declared = manifest.get("sha256")
         if not _looks_like_sha256(declared):
             raise PluginError("插件包清单缺少有效的 sha256 字段：%s" % manifest_path)
-        actual = _sha256_file(dll_path)
+        actual = _sha256_file(version_path)
         if actual != declared:
             raise PluginError(
-                "插件包 version.dll 校验失败：文件哈希与清单不一致（%s）" % dll_path
+                "插件包 version.dll 校验失败：文件哈希与清单不一致（%s）" % version_path
             )
-        return Bundle(version=version, sha256=actual)
+
+        winhttp_sha = None
+        files = manifest.get("files")
+        if files is not None:
+            if not isinstance(files, dict):
+                raise PluginError("插件包清单 files 字段格式不正确：%s" % manifest_path)
+            for name, value in files.items():
+                if name not in KNOWN_DLL_NAMES:
+                    raise PluginError(
+                        "插件包清单 files 含未知文件：%r" % (name,)
+                    )
+                if not _looks_like_sha256(value):
+                    raise PluginError(
+                        "插件包清单 files[%s] 缺少有效 sha256：%s"
+                        % (name, manifest_path)
+                    )
+                if name == VERSION_DLL_NAME:
+                    if value != declared:
+                        raise PluginError(
+                            "插件包清单 files[version.dll] 与顶层 sha256 不一致：%s"
+                            % manifest_path
+                        )
+                    continue
+                winhttp_path = self.bundle_dir / WINHTTP_DLL_NAME
+                if not winhttp_path.is_file():
+                    raise PluginError(
+                        "插件包不完整：清单声明了 winhttp.dll 但文件缺失：%s"
+                        % winhttp_path
+                    )
+                if _sha256_file(winhttp_path) != value:
+                    raise PluginError(
+                        "插件包 winhttp.dll 校验失败：文件哈希与清单不一致（%s）"
+                        % winhttp_path
+                    )
+                winhttp_sha = value
+        return Bundle(version=version, sha256=actual, winhttp_sha256=winhttp_sha)
 
     def _resolve_game_dir(self, game_dir) -> Path:
         raw = Path(game_dir)
@@ -459,15 +609,123 @@ class PluginManager:
                 "受管文件的符号链接指向游戏目录之外，已拒绝：%s" % path
             )
 
+    # -- backend selection --------------------------------------------------
+
+    def _analyze_selection(
+        self, bundle: Bundle, version_sha, version_owned, winhttp_sha, winhttp_owned
+    ) -> dict:
+        """Decide which backend to use without mutating anything.
+
+        Returns ``{"selected": name|None, "blocked": bool, "conflicts": [...]}``
+        where ``conflicts`` lists the file names that prevent coexistence.
+        """
+        version_present = version_sha is not None
+        winhttp_present = winhttp_sha is not None
+        if version_present and not version_owned:
+            # A third-party version.dll owns the default slot.
+            if not bundle.has_alternate:
+                return {
+                    "selected": None,
+                    "blocked": True,
+                    "conflicts": [VERSION_DLL_NAME],
+                }
+            if winhttp_present and not winhttp_owned:
+                return {
+                    "selected": None,
+                    "blocked": True,
+                    "conflicts": [VERSION_DLL_NAME, WINHTTP_DLL_NAME],
+                }
+            return {
+                "selected": WINHTTP_DLL_NAME,
+                "blocked": False,
+                "conflicts": [],
+            }
+        if version_present:
+            # Our own version.dll backend (legacy default) is already in place.
+            return {
+                "selected": VERSION_DLL_NAME,
+                "blocked": False,
+                "conflicts": [],
+            }
+        # version.dll slot is free: prefer an already-owned winhttp backend so a
+        # working coexistence install is not migrated back unnecessarily.
+        if winhttp_owned and bundle.has_alternate:
+            return {
+                "selected": WINHTTP_DLL_NAME,
+                "blocked": False,
+                "conflicts": [],
+            }
+        return {"selected": VERSION_DLL_NAME, "blocked": False, "conflicts": []}
+
+    def _raise_conflict(self, analysis: dict, game_root: Path) -> None:
+        conflicts = analysis["conflicts"]
+        if WINHTTP_DLL_NAME in conflicts:
+            message = (
+                "游戏目录中的 version.dll 与 winhttp.dll 均已被其他插件占用，"
+                "为避免覆盖已中止安装：%s" % game_root
+            )
+        else:
+            message = (
+                "游戏目录中已存在非本工具安装的 version.dll，且插件包未提供 "
+                "winhttp.dll 备用后端，已拒绝覆盖：%s" % (game_root / VERSION_DLL_NAME)
+            )
+        raise PluginError(message, state="conflict")
+
+    def _uninstall_primary(
+        self, receipt, version_sha, version_owned, winhttp_sha, winhttp_owned
+    ) -> str:
+        """Pick the single DLL name uninstall should consider removing.
+
+        The receipt's file name wins when the recorded hash still matches the
+        file on disk (even if that file is no longer owned, it must not be
+        silently dropped).  Otherwise fall back to whichever backend is
+        actually owned.
+        """
+        rec = self._receipt_dll(receipt)
+        if rec is not None:
+            current = version_sha if rec[0] == VERSION_DLL_NAME else winhttp_sha
+            if rec[1] == current:
+                return rec[0]
+        if version_owned:
+            return VERSION_DLL_NAME
+        if winhttp_owned:
+            return WINHTTP_DLL_NAME
+        return rec[0] if rec is not None else VERSION_DLL_NAME
+
     # -- ownership ----------------------------------------------------------
 
     @staticmethod
-    def _dll_is_owned(sha256, bundle: Bundle, receipt) -> bool:
-        if sha256 is None:
+    def _receipt_dll(receipt):
+        """Return ``(dll_name, sha256)`` recorded by a receipt, or ``None``.
+
+        Legacy receipts (no ``dll_name``) always describe ``version.dll``; the
+        recorded hash is therefore scoped to the legacy name only.
+        """
+        if not receipt:
+            return None
+        sha = receipt.get("dll_sha256")
+        if not _looks_like_sha256(sha):
+            return None
+        name = receipt.get("dll_name")
+        if name is None:
+            name = VERSION_DLL_NAME
+        if name not in KNOWN_DLL_NAMES:
+            return None
+        return (name, sha)
+
+    def _dll_owned(self, name, sha256, bundle, receipt) -> bool:
+        if sha256 is None or name not in KNOWN_DLL_NAMES:
             return False
-        if sha256 == bundle.sha256 or sha256 == KNOWN_PROTOTYPE_SHA256:
-            return True
-        return bool(receipt and receipt.get("dll_sha256") == sha256)
+        if name == VERSION_DLL_NAME:
+            if sha256 == KNOWN_PROTOTYPE_SHA256:
+                return True
+            if bundle is not None and sha256 == bundle.sha256:
+                return True
+        elif bundle is not None and bundle.winhttp_sha256 is not None:
+            if sha256 == bundle.winhttp_sha256:
+                return True
+        rec = self._receipt_dll(receipt)
+        return bool(rec is not None and rec == (name, sha256))
 
     @staticmethod
     def _cfg_is_owned(sha256, expected_sha256: str, receipt) -> bool:
@@ -476,6 +734,12 @@ class PluginManager:
         if sha256 == expected_sha256:
             return True
         return bool(receipt and receipt.get("config_sha256") == sha256)
+
+    def _receipt_matches(self, receipt, name, dll_sha, cfg_sha) -> bool:
+        rec = self._receipt_dll(receipt)
+        if rec is None or rec != (name, dll_sha):
+            return False
+        return receipt.get("config_sha256") == cfg_sha
 
     # -- config -------------------------------------------------------------
 
@@ -593,13 +857,19 @@ class PluginManager:
 
     # -- misc ---------------------------------------------------------------
 
-    def _result(self, bundle, game_root, *, changed, state):
+    def _result(self, bundle, game_root, *, changed, state, dll_name=None):
         return {
             "version": bundle.version,
             "state": state,
             "game_dir": str(game_root),
             "export_dir": str(self.export_dir),
             "changed": changed,
+            "dll_name": dll_name,
+            "mode": (
+                "winhttp"
+                if dll_name == WINHTTP_DLL_NAME
+                else ("version" if dll_name else None)
+            ),
         }
 
 

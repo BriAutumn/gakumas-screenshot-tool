@@ -174,6 +174,7 @@ class Launcher:
         ttk.Label(updates, text=f"版本 {self.config['version']} · 更新工具和导出插件", style='Muted.TLabel').pack(anchor='w', pady=(7,0))
         data = ttk.LabelFrame(body, text=' 4   模拟数据 ', padding=12); data.pack(fill='x', pady=12)
         ttk.Label(data, textvariable=self.data_status, wraplength=round(605 * scale)).pack(anchor='w')
+        ttk.Label(data, text='赛季更新时请同步上游', style='Muted.TLabel', wraplength=round(605 * scale)).pack(anchor='w', pady=(6,0))
         row = ttk.Frame(data); row.pack(fill='x', pady=(8,0))
         self.button(row, '同步上游数据', self.sync_data).pack(side='left')
         self.button(row, '回退模拟数据', self.rollback_data).pack(side='left', padx=8)
@@ -298,7 +299,12 @@ class Launcher:
 
     def _plugin_result(self, info):
         labels = {'installed':'插件已安装','not_installed':'未安装插件','prototype':'旧版插件，可更新','update_available':'插件或导出配置需要更新','conflict':'与现有插件文件冲突'}
-        self.plugin_status.set(labels.get(info['state'],info['state']) + (' · 游戏正在运行' if info.get('running') else ''))
+        state = info.get('state')
+        if state == 'installed' and info.get('dll_name') == 'winhttp.dll':
+            label = '插件已安装（兼容模式，已保留原有插件）'
+        else:
+            label = labels.get(state, state)
+        self.plugin_status.set(label + (' · 游戏正在运行' if info.get('running') else ''))
         self.message.set('插件操作完成；启动游戏进入主页面后，读取最新回忆。' if info.get('changed') else self.plugin_status.get())
 
     def plugin_action(self, action):

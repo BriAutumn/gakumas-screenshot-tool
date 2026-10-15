@@ -1,5 +1,9 @@
 {
-  "version": "1.0.2",
-  "sha256": "9186d9d7c91710bd696e8e1c5cd28dc4290ba369d9374ef0c3a834186a137422",
-  "schema_version": 1
+  "version": "1.0.3",
+  "sha256": "a650b5c8f1fa1685d24df63f6beab7cb7656ef52347c84648b9bfd0e4581cb7a",
+  "schema_version": 1,
+  "files": {
+    "version.dll": "a650b5c8f1fa1685d24df63f6beab7cb7656ef52347c84648b9bfd0e4581cb7a",
+    "winhttp.dll": "61f0d0b4810415b31aa1a026061e47015a5b907ed9793061881fb9cd1230d060"
+  }
 }

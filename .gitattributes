@@ -4,5 +4,9 @@
 *.mjs text eol=lf
 *.json text eol=lf
 *.md text eol=lf
+*.toml text eol=lf
 runtime/** -text
 assets/** -text
+runtime/node/upstream/** linguist-vendored
+assets/recognition/** linguist-generated
+assets/native/mapping.json linguist-generated

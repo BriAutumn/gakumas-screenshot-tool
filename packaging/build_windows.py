@@ -26,6 +26,9 @@ def main():
     plugin = ROOT/'assets/plugin'
     expected = json.loads((plugin/'plugin.json').read_text(encoding='utf8'))
     if digest(plugin/'version.dll') != expected['sha256']: raise ValueError('插件哈希不符')
+    for name, expected_hash in expected.get('files', {}).items():
+        if name not in ('version.dll', 'winhttp.dll') or digest(plugin/name) != expected_hash:
+            raise ValueError('插件共存入口校验失败：'+name)
     manifest = json.loads((ROOT/'runtime/node/manifest.json').read_text(encoding='utf8'))
     for name, expected in manifest['files'].items():
         if digest(ROOT/'runtime/node/upstream'/name) != expected: raise ValueError('引擎校验失败：'+name)
