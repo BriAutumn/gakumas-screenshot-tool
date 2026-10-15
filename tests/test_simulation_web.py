@@ -18,6 +18,8 @@ class SimulationWebTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = SimulationServer(('127.0.0.1', 0))
+        cls.library_fixture = tempfile.TemporaryDirectory()
+        cls.server.libraries = {'test-library': Path(cls.library_fixture.name)}
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.loadout = Loadout.load(ROOT / 'examples/simulation/original.loadout.json').to_dict()
@@ -27,6 +29,7 @@ class SimulationWebTests(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join(timeout=3)
+        cls.library_fixture.cleanup()
 
     def request(self, path, body=None, headers=None, authenticated=True):
         h = {'X-GK-Token': self.server.token} if authenticated else {}
@@ -70,6 +73,19 @@ class SimulationWebTests(unittest.TestCase):
     def test_origin_and_token_required(self):
         self.assertEqual(self.request('/api/bootstrap', authenticated=False)[0], 403)
         self.assertEqual(self.request('/api/cancel', {'job_id': 'x'}, {'Origin':'https://other.example'})[0], 403)
+
+    def test_return_to_workbench_requires_managed_service_and_authentication(self):
+        self.assertEqual(self.request('/api/workbench', {})[0],404)
+        event=threading.Event()
+        self.server.workbench_requested=event
+        try:
+            self.assertEqual(self.request('/api/workbench', {},authenticated=False)[0],403)
+            self.assertEqual(self.request('/api/workbench', {},{'Origin':'https://other.example'})[0],403)
+            self.assertFalse(event.is_set())
+            self.assertEqual(self.request('/api/workbench', {})[0],200)
+            self.assertTrue(event.is_set())
+        finally:
+            del self.server.workbench_requested
         self.assertEqual(self.request('/', headers={'Host':'other.example'})[0], 403)
 
     def test_no_arbitrary_file_or_library_access(self):
@@ -82,6 +98,7 @@ class SimulationWebTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn(self.server.token.encode(), html)
         self.assertEqual(self.request('/images/cards/567.png', authenticated=False)[0], 200)
+        self.assertEqual(self.request('/library-handoff.js', authenticated=False)[0], 200)
         code, raw = self.request('/api/bootstrap')
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(raw)['initial'], self.loadout)
@@ -162,7 +179,7 @@ class SimulationWebTests(unittest.TestCase):
         original_root = self.server.search_root
         original_searches = self.server.searches
         try:
-            with tempfile.TemporaryDirectory() as folder, patch('gkshot.simulation_web.USER_ROOT', Path(folder)), patch.object(self.server, 'load_searches'):
+            with tempfile.TemporaryDirectory() as folder, patch('gkshot.simulation_web.PROJECT_ROOT', Path(folder)), patch.object(self.server, 'load_searches'):
                 self.server.search_root = Path(folder) / 'searches'
                 self.server.searches = {}
                 # Deliberately insert oldest last: in-memory insertion is not creation order.
@@ -173,7 +190,7 @@ class SimulationWebTests(unittest.TestCase):
                     os.utime(path, ns=(timestamp, timestamp))
                     self.server.searches[key] = {'manifest': {'config': {'stage_id': stage}}, 'snapshot': {'state': status}}
                 def stages():
-                    code, raw = self.request('/api/season-progress')
+                    code, raw = self.request('/api/season-progress?season=52')
                     self.assertEqual(code, 200, raw)
                     return json.loads(raw)['stages']
                 rows = stages()
@@ -183,7 +200,8 @@ class SimulationWebTests(unittest.TestCase):
                 queue = Path(folder) / 'work/simulation/season52-rounds-queue.json'
                 queue.parent.mkdir(parents=True)
                 queue.write_text(json.dumps([{'stage_id':181,'search_id':'a'*32}, {'stage_id':182,'search_id':'f'*32}]))
-                self.assertEqual([r['search_id'] for r in stages()], ['a'*32, 'c'*32, None])
+                # Legacy script queues must not override the current web selection.
+                self.assertEqual([r['search_id'] for r in stages()], ['b'*32, 'c'*32, None])
         finally:
             self.server.search_root = original_root
             self.server.searches = original_searches

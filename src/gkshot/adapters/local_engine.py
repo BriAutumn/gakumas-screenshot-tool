@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-from gkshot.catalog import PROJECT_ROOT
+from gkshot.app_paths import RESOURCE_ROOT
+from gkshot.resource_paths import RUNTIME_ROOT
 from gkshot.models import Loadout
 
 
@@ -27,8 +28,9 @@ class LocalSimulator:
         self.persistent = persistent
         self._worker = None
         self._identity = None
-        self.node = node or shutil.which("node")
-        self.runtime = Path(runtime or PROJECT_ROOT / "runtime/node").resolve()
+        bundled = RESOURCE_ROOT / 'runtime/node-bin/node.exe'
+        self.node = node or (str(bundled) if bundled.is_file() else shutil.which('node'))
+        self.runtime = Path(runtime or RUNTIME_ROOT).resolve()
         if not self.node:
             raise SimulationError("未找到 Node.js，请安装 Node.js 24 LTS。")
 

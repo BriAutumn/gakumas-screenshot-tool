@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from gkshot.adapters.local_engine import LocalSimulator, SimulationCancelled, SimulationError
 from gkshot.models import Loadout
+from gkshot.resource_paths import RUNTIME_ROOT
 from gkshot.catalog import Catalog, PROJECT_ROOT
 from gkshot.memory_library import validate_memory
 
@@ -35,6 +36,21 @@ def summary(scores):
             "min": min(scores), "max": max(scores), "median": statistics.median(scores)}
 
 
+def native_memory_source(report, library, memory_id=None):
+    """Verify native provenance separately from screenshot/human review status."""
+    manifest = json.loads((Path(library) / 'native-import.json').read_text(encoding='utf-8'))
+    source = report.get('native_source', {})
+    revision = json.loads((RUNTIME_ROOT / 'manifest.json').read_text(encoding='utf-8'))['revision']
+    if (manifest.get('source') != 'native-export' or manifest.get('schema_version') != 1
+        or report.get('kind') != 'native-memory'
+        or source.get('catalog_revision') != revision or manifest.get('catalog_revision') != revision
+        or any(source.get(k) != manifest.get(k) for k in ('snapshot_sha256', 'mapping_sha256'))
+        or (memory_id is not None and source.get('memory_id') != memory_id)
+        or type(source.get('ordinal')) is not int or source['ordinal'] < 1):
+        raise ValueError('原生回忆来源或模拟目录版本不一致，请重新导入导出数据')
+    return source
+
+
 def read_ready_memory(library, memory_id):
     """SQLite URI mode=ro prevents initialization, migrations, or accidental writes."""
     database = Path(library).resolve() / "library.sqlite3"
@@ -44,21 +60,24 @@ def read_ready_memory(library, memory_id):
             row = db.execute("SELECT status,report_json,review_json FROM memories WHERE memory_id=?", (memory_id,)).fetchone()
     except sqlite3.Error as error:
         raise ValueError(f'无法只读打开记忆库 {database}：{error}') from error
-    if row is None or row["status"] not in ("auto-resolved", "reviewed"):
+    if row is None or row["status"] not in ("auto-resolved", "reviewed", "native-imported"):
         raise ValueError(f"记忆 {memory_id} 不存在或尚未确认可用")
     if row["status"] == "reviewed":
         review = json.loads(row["review_json"] or "null")
         if not review or review.get("confirmed") is not True:
             raise ValueError("人工审核记录缺少确认")
         return review["draft"]
-    return json.loads(row["report_json"])["draft"]
+    report = json.loads(row["report_json"])
+    if row["status"] == "native-imported":
+        native_memory_source(report, library, memory_id)
+    return report["draft"]
 
 
 def compose_memories(main, sub, *, stage_id, support_bonus, catalog=None, idols=None):
     catalog = catalog or Catalog()
     main, sub = validate_memory(main, catalog), validate_memory(sub, catalog)
     if idols is None:
-        runtime = PROJECT_ROOT / 'runtime/node'
+        runtime = RUNTIME_ROOT
         manifest = json.loads((runtime / 'manifest.json').read_text(encoding='utf-8'))
         relative = 'packages/gakumas-data/json/p_idols.json'
         raw = (runtime / 'upstream' / relative).read_bytes()
@@ -71,6 +90,7 @@ def compose_memories(main, sub, *, stage_id, support_bonus, catalog=None, idols=
         raise ValueError('主副记忆必须属于相同角色和计划；同角色不同版本可以组合')
     # Mirrors upstream LoadoutContext.setMemory and getMemoryParamContribution.
     loadout = Loadout.from_dict({"schema_version": 1, "stage_id": stage_id,
+        "p_idol_id": main['p_idol_id'],
         "support_bonus": support_bonus,
         "parameters": {key: main["parameters"][key] + sub["parameters"][key] // 5
                        for key in ("vocal", "dance", "visual", "stamina")},
@@ -84,7 +104,7 @@ def list_ready_memories(library):
     database = Path(library).resolve() / 'library.sqlite3'
     try:
         with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as db:
-            rows = db.execute("SELECT memory_id FROM memories WHERE status IN ('auto-resolved','reviewed') ORDER BY created_at").fetchall()
+            rows = db.execute("SELECT memory_id FROM memories WHERE status IN ('auto-resolved','reviewed','native-imported') ORDER BY created_at").fetchall()
     except sqlite3.Error as error:
         raise ValueError(f'无法只读打开记忆库 {database}：{error}') from error
     return [(row[0], read_ready_memory(library, row[0])) for row in rows]

@@ -49,6 +49,15 @@ function makeConfig(l) {
   });
   const idol = new IdolConfig({params, supportBonus: l.support_bonus, pItemIds: l.item_ids,
     skillCardIdGroups: l.card_ids, customizationGroups: groups});
+  if (Object.hasOwn(l, 'p_idol_id')) {
+    check(integer(l.p_idol_id, 1), 'Invalid explicit idol ID');
+    const identity = PIdols.getById(l.p_idol_id);
+    check(identity?.plan, 'Unknown explicit idol ID');
+    idol.pIdolId = identity.id;
+    idol.idolId = identity.idolId;
+    idol.plan = identity.plan;
+    idol.recommendedEffect = identity.recommendedEffect;
+  }
   check(idol.plan, 'Cannot infer idol plan from empty/free-only cards and items');
   check(stage.plan === 'free' || stage.plan === idol.plan, 'Idol plan does not match stage');
   for (const [ids, table] of [[l.card_ids.flat(), SkillCards], [l.item_ids, PItems]]) {

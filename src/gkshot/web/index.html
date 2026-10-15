@@ -1,57 +1,25 @@
-<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="gk-token" content="__TOKEN__"><title>竞技场模拟器 · GKTools 本地</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script><script src="/ranking.js" defer></script></head>
-<body>
-<div class="sticky-heading"><header><div class="brand"><span class="brand-icon">G</span><strong>GKTools <small>LOCAL</small></strong></div><nav><span class="active">竞技场模拟器</span><a href="#search-section">全库排行榜</a></nav><span class="offline"><i></i>本地运行</span></header><nav id="season-nav" aria-label="第52赛季舞台切换"><span class="season-label">S52 · 分轮推进</span><div id="season-stages"></div></nav></div>
-<main>
- <div class="page-heading"><div><div class="eyebrow">CONTEST SIMULATOR</div><h1>竞技场模拟器</h1></div><p>编辑编成，看看每一次可能。</p></div>
- <div id="notice" role="status" hidden></div>
- <div class="workspace">
- <section class="editor" aria-label="编成编辑">
-  <div class="section-heading"><h2>当前编成</h2><button id="import-url" class="text-button">导入 GKTools 链接 ↗</button></div>
-  <div class="stage-row"><label>场地<select id="stage"></select></label><label class="bonus">支援加成 <span>%</span><input id="bonus" type="number" min="0" step="0.01" value="4.72"></label></div>
-  <div id="stage-description" class="stage-description"></div>
-  <div class="parameters"><label class="vocal">Vocal<input id="vocal" type="number" min="0" step="1"></label><label class="dance">Dance<input id="dance" type="number" min="0" step="1"></label><label class="visual">Visual<input id="visual" type="number" min="0" step="1"></label><label class="stamina">体力<input id="stamina" type="number" min="1" step="1"></label></div>
-  <div class="row-heading"><h3>P 道具</h3><span>使用主记忆道具</span></div><div id="items" class="item-grid"></div>
-  <div class="row-heading"><h3>主记忆 <span>MAIN</span></h3><button class="text-button memory-open">从记忆库选择</button></div><div id="cards-0" class="card-grid"></div>
-  <div class="row-heading"><h3>副记忆 <span>SUB</span></h3><span>点击卡片编辑或设置强化</span></div><div id="cards-1" class="card-grid"></div>
-  <p id="memory-provenance" class="muted"></p>
-  <div class="run-options"><span class="auto-pill">自动模拟</span><label>运行次数<input id="trials" type="number" min="1" max="100000" value="2000"></label><input id="trials-range" aria-label="运行次数滑杆" type="range" min="100" max="10000" step="100" value="2000"></div>
-  <div class="seed-row"><label>随机种子 <input id="seed" type="number" min="0" max="4294967295" value="610397104"></label><button id="random-seed" class="text-button">换一个种子</button><span>同输入可复现</span></div>
-  <button id="simulate" class="primary">模拟</button><button id="cancel" class="cancel" hidden>停止模拟</button><div class="progress-track" hidden><div id="progress-bar"></div></div><p id="progress-label" aria-live="polite"></p>
-  <div class="editor-actions"><button id="import-json">↑ 导入 JSON</button><button id="export-json">↓ 导出编成</button><button id="copy-url">↗ GKTools URL</button></div>
-  <div class="candidate-controls"><input id="candidate-name" aria-label="候选名称" maxlength="110" value="编成 A"><button id="add-candidate">＋ 加入候选</button></div><div id="candidates"></div><button id="compare-candidates" class="secondary" hidden>比较所有候选</button>
- </section>
- <section class="results" aria-label="模拟结果">
-  <div class="section-heading"><h2>分数分布</h2><span id="result-count" class="muted">等待模拟</span></div>
-  <div id="summary" class="summary"><div><span>平均分</span><strong>—</strong></div><div><span>中位数</span><strong>—</strong></div><div><span>单次标准差</span><strong>—</strong></div></div>
-  <div class="chart-wrap"><svg id="histogram" viewBox="0 0 760 300" role="img" aria-label="模拟分数分布直方图"></svg><div id="chart-empty"><span>▥</span><strong>每一次模拟，都有不同可能</strong><p>左侧确认编成后开始模拟，查看真实分数分布。</p></div></div>
-  <div class="chart-caption"><span><i class="legend"></i>每个分数区间的出现次数</span><button id="export-scores" class="text-button" disabled>↓ 导出分数 CSV</button></div>
-  <div class="tabs"><button id="tab-stats">统计</button><button id="tab-comparison" class="selected">比较</button></div>
-  <div id="stats-panel" hidden><div class="empty-history">完成模拟后查看详细统计。</div></div>
-  <div id="comparison-panel"><div class="history-toolbar"><div class="segmented"><button id="history-tab" class="selected">历史</button><button id="saved-tab">已保存</button></div><label>场地 <select id="history-stage"><option value="current">当前场地</option><option value="all">全部场地</option></select></label></div><div id="history"></div><div id="history-empty" class="empty-history">还没有模拟记录<p>完成一次模拟后，结果会自动保留在这里。</p></div></div>
-  <p class="footnote">箱体表示 25%–75% 分位数，圆点为均分，横线为最低至最高分。<br>按样本均值比较，波动和采样误差可能影响名次。<br>此浏览器保留最近20条历史；点击 ☆ 长期保留，重要结果可另行导出。</p>
- </section>
- </div>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="gk-token" content="__TOKEN__"><title>竞技场全库搜索 · 回忆工具</title><link rel="icon" href="/app-icon.png?v=__APP_ICON_SHA__" type="image/png"><link rel="stylesheet" href="/style.css"><script src="/season.js" defer></script><script src="/chart.js" defer></script><script src="/app.js" defer></script><script src="/library-handoff.js" defer></script><script src="/ranking.js" defer></script><script src="/native-import.js" defer></script></head><body>
+<div class="sticky-heading"><header><div class="brand"><img class="brand-icon" src="/app-icon.png?v=__APP_ICON_SHA__" alt="回忆工具图标"><strong>回忆工具 <small>LOCAL</small></strong></div><nav>竞技场全库搜索</nav><button id="return-workbench" hidden>打开启动器</button></header><div id="season-nav"><label>新搜索赛季<select id="season-select"></select></label><div id="season-stages" aria-label="选择搜索舞台"></div></div></div>
+<main><div class="page-heading"><div><div class="eyebrow">LIBRARY SEARCH</div><h1>找到你的最佳编成</h1></div><button id="upstream-open">从库选主副 → 原站模拟 ↗</button></div><div id="notice" role="status" hidden></div>
+<section class="search-setup"><div class="search-controls"><button id="native-import">读取最新回忆</button><label class="library-choice">当前记忆库<select id="search-library"></select></label><label>当前舞台<select id="stage"></select></label><label>支援加成 %<input id="bonus" type="number" min="0" step="0.01" value="4.72"></label><label>随机种子<input id="seed" type="number" min="0" max="4294967295" value="610397104"></label></div><p id="library-source" class="muted"></p><p id="stage-description" class="muted"></p><p id="start-context" class="launch-summary"></p><div class="launch-actions"><button id="search-start">搜索当前舞台</button><button id="season-start" class="primary">启动本赛季三场轮转</button></div><p class="muted">每组累计20 / 40 / 60 / 80 / 100次，再以2000次复测。三场轮转每轮依次推进；活动与联赛暂不支持。</p></section>
+<section class="season-run-panel"><div class="search-controls"><label>已保存的三场任务<select id="season-history"></select></label><button id="season-pause" hidden>暂停三场轮转</button><button id="season-resume" hidden>继续三场轮转</button></div><p id="season-status" role="status">尚未创建三场任务</p></section>
  <section id="search-section" class="search-section" aria-label="全库排行榜">
-  <div class="section-heading"><div><div class="eyebrow">LIBRARY SEARCH</div><h2>全库排行榜</h2></div><span class="auto-pill">5轮 × 20次初筛 → 2000次复测</span></div>
-  <p>使用左侧的场地、支援加成与种子，遍历库内同角色、同计划的全部主副组合。总榜帮助选择角色，角色榜查看各自最佳编成。</p>
-  <div class="search-controls"><label>搜索记忆库<select id="search-library"></select></label><button id="search-preview">统计组合</button><button id="search-start" class="primary">开始全量搜索</button></div>
+  <div class="section-heading"><div><div class="eyebrow">LIBRARY SEARCH</div><h2>排行榜</h2></div><span class="auto-pill">5轮 × 20次初筛 → 2000次复测</span></div>
+  <p>按上方新搜索设置，遍历库内同角色、同计划的全部主副组合。总榜帮助选择角色，角色榜查看各自最佳编成。</p>
+  <div class="search-controls"><button id="search-preview">统计组合</button></div>
   <p id="search-estimate" class="muted">编号沿用采集时的顺序；主、副互换视为不同组合。</p>
   <div class="search-controls"><label>已保存的搜索<select id="search-history"><option value="">尚无搜索</option></select></label><button id="search-resume" hidden>继续 / 重试失败项</button><button id="search-stop" hidden>停止并保留结果</button></div>
   <p id="search-status" aria-live="polite">等待搜索</p><progress id="search-progress" max="1" value="0"></progress>
-  <div class="rank-toolbar"><div class="segmented"><button id="rank-total" class="selected">总榜</button><button id="rank-characters">角色榜</button></div><label>结果阶段<select id="rank-phase"><option value="refine">2000 次复测榜</option><option value="screen">初筛累计榜</option></select></label><button id="rank-all" hidden>返回全部角色</button><button id="rank-compare">对比已选（0/4）</button><button id="rank-export">导出本榜 CSV</button></div>
-  <p id="rank-context" class="muted"></p><div id="round-stability"></div><div id="rank-table" class="rank-scroll"></div>
+  <div class="rank-toolbar"><div class="segmented"><button id="rank-total" class="selected">总榜</button><button id="rank-characters">角色榜</button></div><label>结果阶段<select id="rank-phase"><option value="screen">初筛累计榜</option><option value="refine">2000 次复测榜</option></select></label><button id="rank-all" hidden>返回全部角色</button><button id="rank-compare">对比已选（0/4）</button><button id="rank-export">导出本榜 CSV</button></div>
+  <p id="rank-context" class="muted"></p><details><summary>轮次稳定性</summary><div id="round-stability"></div></details><div id="rank-table" class="rank-scroll"></div>
   <div class="rank-pagination"><button id="rank-prev">上一页</button><span id="rank-page">0 / 0</span><button id="rank-next">下一页</button></div>
   <details id="search-errors" hidden><summary>未纳入 / 模拟失败的记录</summary><div></div></details>
   <p class="footnote">新搜索复测：每角色保底前3组；以角色榜第3名为竞争参照，有竞争力的角色加入接近组合、最多15组。复测明显上升可补测；旧任务按其规则标签执行。<br>这是筛选参考，不能保证理论最高分；“接近第一”表示采样误差可能影响名次。复测使用独立种子，榜单按相同次数的样本均分排序。<br>结果自动保存到本地，刷新或重开可继续。每个场地单独排行；仅覆盖当前库中已可用的回忆。</p>
  </section>
- <footer><span>GKTools 原引擎 · 本地离线版</span><span id="version"></span><a href="/LICENSE" target="_blank" rel="noopener">上游许可与致谢</a></footer>
-</main>
-<input id="file-input" type="file" accept=".json,application/json" multiple hidden>
-<dialog id="picker"><div class="dialog-heading"><h2 id="picker-title">选择卡片</h2><button class="close-dialog" aria-label="关闭">×</button></div><input id="search" placeholder="搜索名称或 ID…" aria-label="搜索卡片或道具"><div id="picker-list"></div><div id="customization-editor"></div><div class="dialog-actions"><button id="clear-slot">清空此槽</button><button id="apply-slot" class="primary">应用</button></div></dialog>
-<dialog id="url-dialog"><div class="dialog-heading"><h2>导入 GKTools 链接</h2><button class="close-dialog" aria-label="关闭">×</button></div><p>完整编成会填入左侧，可编辑后直接运行。</p><textarea id="url-input" rows="5" placeholder="粘贴包含 stage、params、cards 等字段的完整链接"></textarea><button id="apply-url" class="primary">导入编成</button></dialog>
-<dialog id="memory-dialog"><div class="dialog-heading"><h2>选择主副记忆</h2><button class="close-dialog" aria-label="关闭">×</button></div><p>只读列出已可用记忆；主副需属于同一角色和计划。</p><label>记忆库<select id="library"></select></label><label>主记忆<select id="main-memory"></select></label><label>副记忆<select id="sub-memory"></select></label><p id="memory-note">主属性100% + 副属性20%向下取整；使用主道具。</p><button id="preview-memories">查看主副回忆封面</button><button id="apply-memories" class="primary">合成并填入当前编成</button></dialog>
+
+<details class="saved-history"><summary>浏览器保存的历史成绩</summary><div id="history"></div></details><footer><span id="version"></span><a href="/LICENSE" target="_blank" rel="noopener">上游许可与致谢</a></footer></main>
+<dialog id="memory-dialog"><div class="dialog-heading"><h2>从库选主、副回忆</h2><button class="close-dialog" aria-label="关闭">×</button></div><p>沿用上方赛季、舞台与支援加成。生成链接后，在原站继续模拟。</p><label>当前记忆库<select id="library"></select></label><label>主回忆<select id="main-memory"></select></label><label>副回忆<select id="sub-memory"></select></label><p id="memory-note"></p><button id="preview-memories">查看回忆封面</button><button id="apply-memories">生成原站编成链接</button><p id="upstream-summary"></p><a id="upstream-link" target="_blank" rel="noopener noreferrer" hidden>带此编成打开原站 ↗</a></dialog>
+<dialog id="result-dialog"><div class="dialog-heading"><h2 id="result-title">成绩分布</h2><button class="close-dialog" aria-label="关闭">×</button></div><p id="result-summary"></p><svg id="histogram" viewBox="0 0 760 300" role="img" aria-label="分数直方图"></svg><button id="export-scores">导出分数 CSV</button></dialog>
 <dialog id="rank-comparison"><div class="dialog-heading"><h2>编成对比</h2><button class="close-dialog" aria-label="关闭">×</button></div><div id="rank-comparison-content" class="rank-scroll"></div></dialog>
 <dialog id="memory-cover"><div class="dialog-heading"><h2 id="memory-cover-title">回忆封面</h2><button class="close-dialog" aria-label="关闭">×</button></div><div id="memory-cover-content"></div></dialog>
 </body></html>

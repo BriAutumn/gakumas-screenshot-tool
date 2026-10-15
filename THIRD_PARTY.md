@@ -1,19 +1,13 @@
-# 来源与版本
+# 来源与许可
 
-识别资产来自 [surisuririsu/gakumas-tools](https://github.com/surisuririsu/gakumas-tools)，固定提交：
-`7153b0775c654d58c7b8a17b3a598322a35d0b2a`。
+模拟引擎、卡片/道具/偶像/场地/自定义目录和图标来自 [surisuririsu/gakumas-tools](https://github.com/surisuririsu/gakumas-tools)。本版固定引擎提交 `9ff4610011feb395e363d86d7c961e4da68b6deb`；逐文件哈希保存在 `runtime/node/manifest.json`，上游 BSD-3-Clause 许可原文保存在 `runtime/node/upstream/LICENSE` 和分发包 `licenses/`。
 
-- 卡片模型、分类标签：`gakumas-tools/public/skill_card_*`。
-- 道具模型与标签也已保存，但当前道具识别使用模板，不使用这套模型推断。
-- 名称 / 场地 / 自定义目录：`packages/gakumas-data/json/`，仅用于识别与核对，不执行效果 DSL。
-- 0.5.31 起，`tools/catalog/upstream/` 保留同一固定版本的效果解析器、转换器和 BSD-3-Clause 许可；仅为 Node ESM 补齐 `.js` 导入后缀，原文和本地哈希见 `provenance.json`。开发工具生成 `catalog-effects.json`，用于强化候选的追加、锚点替换和有限数值成长解析；不运行对局模拟。上面“仅目录”是此前状态。
-- 道具图标：`packages/gakumas-images/images/pItems/icons/`，477 张原始图标，运行时仅加载舞台道具。
-- 强化图形参考：`skillCards/icons/592_1.png` 与 `593_1.png`。
-- 独立记忆识别另使用 864 个卡片 ID 的规范图标（每个 ID 一个，普通路径或 `_1` 变体），保留在 `card-icons/`；用于辅助核对 ONNX 低分候选，不假定所有美术变体都一致。
-- 参考的预处理与 URL 行为：[memory.js](https://github.com/surisuririsu/gakumas-tools/blob/7153b0775c654d58c7b8a17b3a598322a35d0b2a/gakumas-tools/utils/imageProcessing/memory.js)、[simulatorLoadout.js](https://github.com/surisuririsu/gakumas-tools/blob/7153b0775c654d58c7b8a17b3a598322a35d0b2a/gakumas-tools/utils/imageProcessing/simulatorLoadout.js)、[simulator.js](https://github.com/surisuririsu/gakumas-tools/blob/7153b0775c654d58c7b8a17b3a598322a35d0b2a/gakumas-tools/utils/simulator.js)。
+原生 ID 映射依据公开的 [vertesan/gakumasu-diff](https://github.com/vertesan/gakumasu-diff) 主数据与上述模拟目录生成，来源版本记录在 `assets/native/mapping.json` 的 provenance 中。映射覆盖整个固定目录，不限于开发者拥有的回忆。
 
-完整路径和 SHA-256 在 `assets/recognition/manifest.json`。上游仓库 BSD-3-Clause 许可原文保留于 `assets/recognition/LICENSE`；游戏名称、美术和用户截图的权利仍归相应权利人，不因仓库代码许可而改变。
+游戏名称、角色与卡图等素材的权利归其相应权利人，上游代码许可不改变素材权利。分发包不包含账号回忆、游戏完整主数据包或 OCR 模型。
 
-OCR 使用 [RapidOCR](https://github.com/RapidAI/RapidOCR) 的 `rapidocr-onnxruntime` 包及其随包模型；ONNX Runtime、NumPy、Pillow、OpenCV 等依赖的版本记录于 `requirements-recognition.txt`，各自许可由安装包保留。
+`assets/memory-covers` 包含本地已发布游戏资源中的 15 张内置回忆封面，按原始 AssetId 提取原纹理；资源 MD5 与 PNG SHA-256 记录在目录内的清单中。封面素材权利归游戏权利人。提取参考 [Gakuen-idolmaster-ab-decrypt](https://github.com/nijinekoyo/Gakuen-idolmaster-ab-decrypt) 的资源格式实现；运行时无需该解包器。玩家拍摄的照片仅从本机缓存只读显示，不随软件分发。
 
-卡片详情另用 RapidAI/RapidOCR 发布的 `japan_PP-OCRv4_rec_mobile.onnx`（PaddleOCR 日文识别模型，v3.9.2 模型集合）。固定下载地址、SHA-256 在 `assets/ocr/manifest.json`，约 9.75 MB。哈希与 [RapidOCR 默认模型清单](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml) 核对；Apache-2.0 许可原文保存为 `assets/ocr/LICENSE-RapidOCR`。模型已经下载到项目，运行时不下载或访问模型站点。
+运行时包括 Python 3.13 / Tcl/Tk 8.6 和 Node.js 24.16.0，无需用户另外安装。相应许可及实际包含的原生依赖许可保存于 `licenses/`，版本记录在 `native-dependencies.json`。只读导出插件源码位于 `tools/native-memory-export/`，使用 Windows 系统 API，不捆绑游戏 DLL。
+
+独立数据同步直接读取 [gakumas-tools/gakumas-tools](https://github.com/gakumas-tools/gakumas-tools) 与上述公开主数据源，并在本机生成对应关系。每次同步保留精确来源提交、文件哈希和校验结果；不向上游发送账号回忆。解析主数据使用 PyYAML 6.0.3（MIT），完整许可随包保存为 `licenses/PyYAML-MIT.txt`。

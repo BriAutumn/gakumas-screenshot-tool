@@ -5,7 +5,8 @@ import re
 from pathlib import Path
 
 from gkshot.app_paths import RESOURCE_ROOT as PROJECT_ROOT
-ASSETS = PROJECT_ROOT / "assets" / "recognition"
+from gkshot.resource_paths import RECOGNITION_ROOT
+ASSETS = RECOGNITION_ROOT
 
 
 class Catalog:

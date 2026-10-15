@@ -46,11 +46,14 @@ class Loadout:
     item_ids: tuple[int, ...]
     card_ids: tuple[tuple[int, ...], ...]
     customizations: tuple[tuple[str, ...], ...]
+    p_idol_id: int | None = None
 
     @classmethod
     def from_dict(cls, value: dict) -> "Loadout":
-        _keys(value, {"schema_version", "stage_id", "support_bonus", "parameters",
-                      "item_ids", "card_ids", "customizations"}, "loadout")
+        fields = {"schema_version", "stage_id", "support_bonus", "parameters",
+                  "item_ids", "card_ids", "customizations"}
+        _keys(value, fields | ({'p_idol_id'} if 'p_idol_id' in value else set()), 'loadout')
+        p_idol_id = _integer(value['p_idol_id'], 'p_idol_id', 1) if 'p_idol_id' in value else None
         if _integer(value["schema_version"], "schema_version") != 1:
             raise ValueError("Unsupported schema_version; expected 1")
         stage = _integer(value["stage_id"], "stage_id", 1)
@@ -70,11 +73,14 @@ class Loadout:
                 if not isinstance(token, str) or any(c in token for c in "-_\r\n"):
                     raise ValueError("customization: expected a token without slot delimiters")
             customizations.append(tuple(row))
-        return cls(1, stage, bonus, parameters, items, cards, tuple(customizations))
+        return cls(1, stage, bonus, parameters, items, cards, tuple(customizations), p_idol_id)
 
     def to_dict(self) -> dict:
         # Convert tuple storage to JSON arrays, including nested rows.
-        return json.loads(json.dumps(asdict(self), allow_nan=False))
+        value = asdict(self)
+        if self.p_idol_id is None:
+            del value['p_idol_id']
+        return json.loads(json.dumps(value, allow_nan=False))
 
     @classmethod
     def load(cls, path: Path) -> "Loadout":

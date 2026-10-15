@@ -9,11 +9,13 @@ from contextlib import closing
 from pathlib import Path
 
 from gkshot.adapters.local_engine import LocalSimulator
+from gkshot.resource_paths import RUNTIME_ROOT
 from gkshot.catalog import Catalog, PROJECT_ROOT
 from gkshot.models import Loadout
+from gkshot.native_photos import native_photo_preview
 from gkshot.simulation_rounds import POLICY as ROUND_POLICY, screen_rounds
 from gkshot.memory_library import validate_memory
-from gkshot.simulation import atomic_json, compare, compose_memories
+from gkshot.simulation import atomic_json, compare, compose_memories, native_memory_source
 
 
 def memory_records(library):
@@ -26,10 +28,16 @@ def memory_records(library):
             by_hash[image['sha256']].append(entry)
     with closing(sqlite3.connect((library / 'library.sqlite3').as_uri() + '?mode=ro', uri=True)) as db:
         db.row_factory = sqlite3.Row
-        rows = db.execute("SELECT memory_id,capture_key,status,report_json,review_json FROM memories WHERE status IN ('auto-resolved','reviewed') ORDER BY created_at,memory_id").fetchall()
+        rows = db.execute("SELECT memory_id,capture_key,status,report_json,review_json FROM memories WHERE status IN ('auto-resolved','reviewed','native-imported') ORDER BY created_at,memory_id").fetchall()
     records = []
     for row in rows:
         report = json.loads(row['report_json'])
+        if row['status'] == 'native-imported':
+            source = native_memory_source(report, library, row['memory_id'])
+            records.append({'id': row['memory_id'], 'draft': report['draft'], 'ordinal': source['ordinal'],
+                            'capture_id': None, 'session_id': None, 'identity': report.get('identity', {}),
+                            'source': 'native-export', 'snapshot_sha256': source['snapshot_sha256']})
+            continue
         if row['status'] == 'reviewed':
             review = json.loads(row['review_json'] or 'null')
             if not review or review.get('confirmed') is not True:
@@ -54,7 +62,7 @@ def memory_records(library):
 
 
 def pinned_idols(catalog):
-    runtime = PROJECT_ROOT / 'runtime/node'
+    runtime = RUNTIME_ROOT
     manifest = json.loads((runtime / 'manifest.json').read_text(encoding='utf-8'))
     name = 'packages/gakumas-data/json/p_idols.json'
     raw = (runtime / 'upstream' / name).read_bytes()
@@ -64,9 +72,9 @@ def pinned_idols(catalog):
 
 
 def pinned_names():
-    names_path = PROJECT_ROOT / 'runtime/node/upstream/packages/gakumas-data/json/idols.json'
+    names_path = RUNTIME_ROOT / 'upstream/packages/gakumas-data/json/idols.json'
     names_raw = names_path.read_bytes()
-    manifest = json.loads((PROJECT_ROOT / 'runtime/node/manifest.json').read_text(encoding='utf-8'))
+    manifest = json.loads((RUNTIME_ROOT / 'manifest.json').read_text(encoding='utf-8'))
     if hashlib.sha256(names_raw).hexdigest() != manifest['files']['packages/gakumas-data/json/idols.json']:
         raise ValueError('角色名称数据校验失败')
     names = {r['id']: r['name'] for r in json.loads(names_raw)}
@@ -328,6 +336,16 @@ def memory_preview(library, memory_id):
     """Return the exact selected-memory screenshot, never a generic idol/card image."""
     library = Path(library).resolve()
     record = next((r for r in memory_records(library) if r['id'] == memory_id), None)
+    if record and record.get('source') == 'native-export':
+        preview = {'source': 'native-export', 'ordinal': record['ordinal'], 'memory_id': record['id'],
+                   'draft': record['draft'], 'snapshot_sha256': record['snapshot_sha256']}
+        try:
+            photo = native_photo_preview(library, record['id'], record['ordinal'], record['snapshot_sha256'])
+        except Exception:
+            # The structured native preview must stay usable even if a photo look-up fails.
+            photo = {'photo_status': 'unavailable', 'photo_message': '原始照片暂时无法读取。' + '请在游戏中打开回忆一览后重试。'}
+        preview.update(photo)
+        return preview
     if not record or not record['capture_id']:
         raise ValueError('此回忆没有可验证的采集来源')
     session_path = next(p / 'session.json' for p in library.parents if (p / 'session.json').is_file())

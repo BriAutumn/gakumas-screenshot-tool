@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "covers": [
+    {
+      "asset_id": "img_general_memory_hif-gift-001",
+      "bundle_md5": "7178feaf4d36c7cd3363c5613fbe584b",
+      "image_sha256": "2d0bf97f0f84ef8dec418b7ce8bc47827deb8ac34c5d5e5c23a5df7a5c58783c",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-003",
+      "bundle_md5": "201434f563659919f1c32f2e0075b499",
+      "image_sha256": "f89a8583a352f00dae7d44637548a17142fd37f08e146db9709a0f74df324894",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-010",
+      "bundle_md5": "b7c3c51ce5518911de37bb52d3bea64b",
+      "image_sha256": "3fc20c4a6c0fd301b4a17cab7ce5185df404d0357f2eca0ffbe9576f1e796be1",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_all-produce-failure-001",
+      "bundle_md5": "6f606131e4923194f6684ab21ecbcbf1",
+      "image_sha256": "020fad30f2bf4db9e44c8b2a87ddb557a5e7983384e60d16cc46d51ae7ee878c",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-006",
+      "bundle_md5": "07fdf1a251f024279a2c0cf594a71f8c",
+      "image_sha256": "f89a8583a352f00dae7d44637548a17142fd37f08e146db9709a0f74df324894",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-005",
+      "bundle_md5": "c56e16273bf22b4a8c99175f20e4af0d",
+      "image_sha256": "f89a8583a352f00dae7d44637548a17142fd37f08e146db9709a0f74df324894",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_all-produce-failure-002",
+      "bundle_md5": "e855f6e5349ab1f9d069e5bda22ec98a",
+      "image_sha256": "967f5ca0aa34a5bb666980db9d830fd7e68b3407e04b0d308f018a6f1c6fd58b",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-004",
+      "bundle_md5": "2b2872c654072a2acb62bb8b184eaef6",
+      "image_sha256": "f89a8583a352f00dae7d44637548a17142fd37f08e146db9709a0f74df324894",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-009",
+      "bundle_md5": "2faffe71a08eccf3e66d9f24ecaab41e",
+      "image_sha256": "3fc20c4a6c0fd301b4a17cab7ce5185df404d0357f2eca0ffbe9576f1e796be1",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-007",
+      "bundle_md5": "f1165edacf0d25575030291019f972e5",
+      "image_sha256": "3fc20c4a6c0fd301b4a17cab7ce5185df404d0357f2eca0ffbe9576f1e796be1",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_linkcontest-002",
+      "bundle_md5": "1afa3aee081b26c1d84f41e9219a94ba",
+      "image_sha256": "abc7c247e129ae5d7727f26fd744d70b2b7d484a762d1c0e93b20f54b1e50108",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-002",
+      "bundle_md5": "9d9b4bd4ce34610a58424a5b03e36afd",
+      "image_sha256": "2d0bf97f0f84ef8dec418b7ce8bc47827deb8ac34c5d5e5c23a5df7a5c58783c",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_linkcontest-001",
+      "bundle_md5": "962fd0434aa169cd7c22d38cff2ffc8a",
+      "image_sha256": "d001e3630a378010a7b2920abf4156972518d97b215977927f2cea2275032e8e",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_hif-gift-008",
+      "bundle_md5": "1a6235b5a3453c2b2fe078f420919a2b",
+      "image_sha256": "3fc20c4a6c0fd301b4a17cab7ce5185df404d0357f2eca0ffbe9576f1e796be1",
+      "size": [
+        2048,
+        1024
+      ]
+    },
+    {
+      "asset_id": "img_general_memory_all-produce-failure-003",
+      "bundle_md5": "3f37dd3d12abd52adb0c60bda493fe83",
+      "image_sha256": "109613710cb92b700dae02c1787b8433c241144003860382dd385f435df82772",
+      "size": [
+        2048,
+        1024
+      ]
+    }
+  ]
+}

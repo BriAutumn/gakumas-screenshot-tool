@@ -1,3 +1,8 @@
-# Preserve exact source bytes: catalog/model/fixture manifests pin SHA-256.
-# Do not silently rewrite LF/CRLF during add or checkout.
-* -text
+* text=auto
+*.py text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+runtime/** -text
+assets/** -text

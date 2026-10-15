@@ -12,12 +12,10 @@ def user_root():
         if not Path(override).is_absolute():
             raise ValueError("GKTOOL_USER_HOME 必须是绝对路径")
         return Path(override)
-    if getattr(sys, "frozen", False):
-        local = os.environ.get("LOCALAPPDATA")
-        if not local:
-            raise RuntimeError("无法确定用户数据目录：LOCALAPPDATA 未设置")
-        return Path(local) / "GKTool"
-    return RESOURCE_ROOT
+    local = os.environ.get('LOCALAPPDATA')
+    if not local:
+        raise RuntimeError('无法确定用户数据目录：LOCALAPPDATA 未设置')
+    return Path(local) / 'GKMemoryTool'
 
 
 USER_ROOT = user_root()

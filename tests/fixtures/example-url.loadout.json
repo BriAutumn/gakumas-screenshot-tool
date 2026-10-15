@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "stage_id": 160,
-  "support_bonus": 0.0472,
-  "parameters": {"vocal": 1631, "dance": 2960, "visual": 1941, "stamina": 51},
-  "item_ids": [293, 0, 0, 0],
-  "card_ids": [[567, 87, 117, 762, 158, 166], [567, 620, 109, 117, 146, 163]],
-  "customizations": [["", "", "", "", "", ""], ["", "", "", "31x1", "", ""]]
-}

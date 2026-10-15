@@ -5,18 +5,21 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Stages } from "gakumas-data";
 import { usePathname } from "@/i18n/routing";
 import LoadoutUrlContext from "@/contexts/LoadoutUrlContext";
 import WorkspaceContext from "@/contexts/WorkspaceContext";
-import { getSimulatorUrl } from "@/utils/simulator";
+import { getDefaultParams, getSimulatorUrl } from "@/utils/simulator";
 import { getMemoryParamContribution } from "@/utils/stamina";
 import { FALLBACK_STAGE } from "@/simulator/constants";
 import { fixCustomizations } from "@/utils/customizations";
 
 const LoadoutContext = createContext();
+
+export const LoadoutActionsContext = createContext();
 
 export function LoadoutContextProvider({ children }) {
   const pathname = usePathname();
@@ -150,9 +153,16 @@ export function LoadoutContextProvider({ children }) {
     }
   }, [pItemIds]);
 
+  const stageRef = useRef(stage);
+  stageRef.current = stage;
+  const memoryParamsRef = useRef(memoryParams);
+  memoryParamsRef.current = memoryParams;
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
+
   const clear = useCallback(() => {
     setMemoryParams([null, null]);
-    setParams([null, null, null, null]);
+    setParams(getDefaultParams(stageRef.current));
     setPItemIds([0, 0, 0, 0]);
     setSkillCardIdGroups([
       [0, 0, 0, 0, 0, 0],
@@ -282,7 +292,22 @@ export function LoadoutContextProvider({ children }) {
     });
   }, []);
 
+  const selectStage = useCallback((stageId, customStage) => {
+    const hasDefaultParams = getDefaultParams(stageRef.current).every(
+      (p, i) => p == paramsRef.current[i],
+    );
+    setStageId(stageId);
+    setCustomStage(customStage);
+    if (hasDefaultParams) {
+      const nextStage =
+        stageId == "custom" ? customStage : Stages.getById(stageId);
+      setParams(getDefaultParams(nextStage));
+    }
+  }, []);
+
   const setMemory = useCallback((memory, index) => {
+    const stage = stageRef.current;
+    const memoryParams = memoryParamsRef.current;
     const multiplier = stage.type !== "linkContest" && index ? 0.2 : 1;
 
     if (!memoryParams.some((p) => p)) {
@@ -323,15 +348,13 @@ export function LoadoutContextProvider({ children }) {
       next[index] = memory.customizations || [];
       return next;
     });
-  }, [stage, memoryParams]);
+  }, []);
 
-  const value = useMemo(
+  const actions = useMemo(
     () => ({
-      loadout,
       setLoadout,
       setMemory,
-      setStageId,
-      setCustomStage,
+      selectStage,
       setSupportBonus,
       setParams,
       replacePItemId,
@@ -343,17 +366,13 @@ export function LoadoutContextProvider({ children }) {
       insertSkillCardIdGroup,
       deleteSkillCardIdGroup,
       swapSkillCardIdGroups,
-      stage,
-      simulatorUrl,
-      loadouts,
       setLoadouts,
-      currentLoadoutIndex,
       setCurrentLoadoutIndex,
     }),
     [
-      loadout,
       setLoadout,
       setMemory,
+      selectStage,
       replacePItemId,
       swapPItemIds,
       replaceSkillCardId,
@@ -363,15 +382,27 @@ export function LoadoutContextProvider({ children }) {
       insertSkillCardIdGroup,
       deleteSkillCardIdGroup,
       swapSkillCardIdGroups,
+    ]
+  );
+
+  const value = useMemo(
+    () => ({
+      ...actions,
+      loadout,
       stage,
       simulatorUrl,
       loadouts,
       currentLoadoutIndex,
-    ]
+    }),
+    [actions, loadout, stage, simulatorUrl, loadouts, currentLoadoutIndex]
   );
 
   return (
-    <LoadoutContext.Provider value={value}>{children}</LoadoutContext.Provider>
+    <LoadoutActionsContext.Provider value={actions}>
+      <LoadoutContext.Provider value={value}>
+        {children}
+      </LoadoutContext.Provider>
+    </LoadoutActionsContext.Provider>
   );
 }
 
