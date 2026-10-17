@@ -4,10 +4,12 @@
 //
 // The loader resolves the "WinHttp*" imports of a colocated UnityPlayer.dll
 // against this DLL, so every advertised entry forwards to the real, full-path
-// System32\winhttp.dll. Initialization is lazy (first forwarded call, never in
-// DllMain), the module pins itself, and the shared exporter entrypoint runs
-// exactly once. No hooks, no network interception, no remote-process APIs, no
-// TLS/network changes.
+// System32\winhttp.dll. The first forwarded call drives the lazy (never-in-
+// DllMain) initialization, the module pins itself, and the shared exporter
+// entrypoint runs exactly once. DLL_PROCESS_ATTACH additionally schedules one
+// bounded target-gated background start (see bootstrap.h) so a host that never
+// makes a forwarded call still starts the exporter. No hooks, no network
+// interception, no remote-process APIs, no TLS/network changes.
 //
 // The four imports UnityPlayer.dll uses explicitly are WinHttpOpen,
 // WinHttpGetIEProxyConfigForCurrentUser, WinHttpGetProxyForUrl and
@@ -20,6 +22,8 @@
 #include <windows.h>
 #include <intrin.h>
 #include <string>
+#include "early-diagnostics.h"
+#include "bootstrap.h"
 
 extern "C" void StartMemoryExportOnce();
 
@@ -83,26 +87,41 @@ const char* const kNames[kFunctionCount] = {
 static_assert(sizeof(kNames) / sizeof(kNames[0]) == kFunctionCount, "forward table size mismatch");
 
 BOOL CALLBACK Initialize(PINIT_ONCE, PVOID, PVOID*) {
+    gkearly::Log("initialize_begin");
+
     // Default every slot to the fail handler so a missing symbol only matters
     // when it is actually invoked.
     for (unsigned i = 0; i < kFunctionCount; ++i) winhttpFunctions[i] = &WinHttpMissingExport;
 
     wchar_t system[MAX_PATH];
-    if (!GetSystemDirectoryW(system, MAX_PATH)) return FALSE;
+    if (!GetSystemDirectoryW(system, MAX_PATH)) {
+        gkearly::Log("initialize_system_directory_failed", nullptr, GetLastError());
+        return FALSE;
+    }
+    gkearly::Log("initialize_system_directory_ok");
     std::wstring path = std::wstring(system) + L"\\winhttp.dll";
+    gkearly::Log("initialize_load_begin", "winhttp.dll");
     HMODULE real = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!real) return FALSE;
+    if (!real) {
+        gkearly::Log("initialize_load_failed", "winhttp.dll", GetLastError());
+        return FALSE;
+    }
+    gkearly::Log("initialize_load_ok", "winhttp.dll");
 
+    gkearly::Log("initialize_getprocaddress_begin");
     for (unsigned i = 0; i < kFunctionCount; ++i) {
         FARPROC proc = GetProcAddress(real, kNames[i]);
         if (proc) winhttpFunctions[i] = reinterpret_cast<void (*)()>(proc);
+        else gkearly::Log("initialize_getprocaddress_optional_missing", kNames[i], GetLastError());
     }
+    gkearly::Log("initialize_getprocaddress_ok");
 
     // Pin this module so the thunks and their forward targets can never vanish.
     HMODULE pinned = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                        reinterpret_cast<LPCWSTR>(&Initialize), &pinned);
 
+    gkearly::Log("initialize_call_start_memory_export");
     StartMemoryExportOnce();
     return TRUE;
 }
@@ -121,6 +140,17 @@ extern "C" void EnsureWinHttpProxy() {
 }
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(module);
+    if (reason == DLL_PROCESS_ATTACH) {
+        gkearly::ResetLog();
+        const BOOL disabled = DisableThreadLibraryCalls(module);
+        gkearly::Log("dllmain_attach",
+            disabled ? "disable_thread_library_calls_ok" : "disable_thread_library_calls_error",
+            disabled ? 0 : GetLastError());
+        // Automatic startup: only for the real game, and only a target gate
+        // plus one plain CreateThread handled inside the header. The lazy
+        // Initialize path above stays unchanged as the fallback when this is
+        // skipped or fails.
+        if (gkearly::IsTargetProcessEarly()) gkbootstrap::Schedule();
+    }
     return TRUE;
 }

@@ -3,6 +3,7 @@ import hashlib
 import json
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from gkshot.app_paths import USER_ROOT
@@ -12,6 +13,16 @@ from gkshot.native_memories import CONVERSION_POLICY
 # The native mapping ships with the *pinned* resource set, so a process started
 # after a data update reads the mapping belonging to its own engine/catalog.
 from gkshot.resource_paths import RESOURCE_ROOT
+
+# A status of "running" older than this many seconds is from a previous game
+# session that never published a terminal state (for example the game was closed
+# before the exporter finished). It is surfaced as "stale_running" so the UI can
+# ask for a diagnostic log instead of implying a live export. The threshold is
+# comfortably above the exporter's own 180s readiness/watchdog budget so a
+# legitimate automatic run is never mislabelled as stale. The comparison is
+# plain wall-clock arithmetic (no timezone handling) and a future mtime — clock
+# skew or a touched file — is deliberately never classified as stale.
+STALE_RUNNING_SECONDS = 240
 
 
 class NativeService:
@@ -29,8 +40,16 @@ class NativeService:
             if not isinstance(info, dict):
                 raise ValueError('导出状态格式不正确')
             info = dict(info)
-            info['exported_at'] = status_path.stat().st_mtime
+            stat = status_path.stat()
+            info['exported_at'] = stat.st_mtime
             info['export_dir'] = str(self.export_dir)
+            # Never classify a future mtime as stale: (time.time() - mtime) is
+            # negative then, so it cannot exceed the threshold.
+            if info.get('status') == 'running' and (time.time() - stat.st_mtime) > STALE_RUNNING_SECONDS:
+                info['source_status'] = 'running'
+                info['status'] = 'stale_running'
+                info['completed'] = False
+                info['message'] = '上次导出未完成；本次启动尚无新状态，请提供诊断日志'
             return info
         except FileNotFoundError:
             return {'status': 'not_found', 'completed': False, 'records': 0,

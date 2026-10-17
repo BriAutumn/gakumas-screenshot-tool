@@ -60,7 +60,7 @@ class Launcher:
     def _build(self):
         root = self.root
         scale = root.winfo_fpixels('1i') / 96
-        root.title('学マス回忆工具 · ' + self.config['version'])
+        root.title('学マス回忆工具（启动修复测试版） · ' + self.config['version'])
         if sys.platform == 'win32':
             icon_path = RESOURCE_ROOT / 'assets/app-icon.ico'
             root.iconbitmap(default=str(icon_path))
@@ -234,7 +234,7 @@ class Launcher:
         if not self.busy and not self.closing:
             try:
                 info = self.native.status()
-                label = {'completed':'导出完成', 'running':'游戏数据读取中', 'not_found':'尚无导出', 'not_loaded':'等待游戏数据失败', 'incomplete':'导出未完成', 'io_error':'导出写入失败'}.get(info.get('status'),info.get('status','未知'))
+                label = {'completed':'导出完成', 'running':'游戏数据读取中', 'stale_running':'旧导出状态未更新，请提供诊断日志', 'not_found':'尚无导出', 'not_loaded':'等待游戏数据失败', 'incomplete':'导出未完成', 'io_error':'导出写入失败', 'timeout':'导出超时，请提供诊断日志'}.get(info.get('status'),info.get('status','未知'))
                 stamp = datetime.fromtimestamp(info['exported_at']).strftime('%m-%d %H:%M') if info.get('exported_at') else ''
                 self.export_status.set(f"{label} · {info.get('records', 0)} 份  {stamp}")
             except (ValueError, OSError): self.export_status.set('导出状态暂不可读')

@@ -1,9 +1,9 @@
 {
-  "version": "1.0.3",
-  "sha256": "a650b5c8f1fa1685d24df63f6beab7cb7656ef52347c84648b9bfd0e4581cb7a",
+  "version": "1.0.7-diagnostic",
+  "sha256": "ce428d2e2e99fb0252e0b732e63dabbde92d120392b1e7d98d7f4acf296c9fca",
   "schema_version": 1,
   "files": {
-    "version.dll": "a650b5c8f1fa1685d24df63f6beab7cb7656ef52347c84648b9bfd0e4581cb7a",
-    "winhttp.dll": "61f0d0b4810415b31aa1a026061e47015a5b907ed9793061881fb9cd1230d060"
+    "version.dll": "ce428d2e2e99fb0252e0b732e63dabbde92d120392b1e7d98d7f4acf296c9fca",
+    "winhttp.dll": "17297912aaa17ca8a843f1aef97cea92eab0ee961f11d916a2c07ad1af99a0aa"
   }
 }

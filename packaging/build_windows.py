@@ -79,6 +79,8 @@ def main():
         inventory.append({'name':package['name'],'version':package['version'],'license':package.get('license'),'binaries':matches})
     (folder/'_internal/native-dependencies.json').write_text(json.dumps(inventory,indent=2),encoding='utf8')
     shutil.copy2(ROOT/'README.md',folder/'使用说明.md')
+    shutil.copy2(ROOT/'tools/diagnostics/GKMemoryExport-diagnostic-v3.cmd',
+                 folder/'GKMemoryExport-diagnostic-v3.cmd')
     shutil.copy2(ROOT/'THIRD_PARTY.md',folder/'THIRD_PARTY.md')
     (folder/'恢复原版.cmd').write_text('@echo off\r\n"%~dp0GKMemoryTool.exe" --baseline\r\n',encoding='ascii')
     files={p.relative_to(folder).as_posix():digest(p) for p in sorted(folder.rglob('*')) if p.is_file()}
