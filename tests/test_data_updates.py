@@ -331,6 +331,42 @@ class StatusCheckTests(DataUpdateTestBase):
 
 
 class InstallSourceTests(DataUpdateTestBase):
+    def test_install_generates_catalog_json_from_upstream_csv(self):
+        files = self.files.copy()
+        for name in TABLES:
+            files.pop(f"packages/gakumas-data/json/{name}.json")
+            fields = list(TABLES[name][0])
+            values = [
+                "TRUE" if value is True else "FALSE" if value is False else str(value)
+                for value in TABLES[name][0].values()
+            ]
+            files[f"packages/gakumas-data/csv/{name}.csv"] = (
+                ",".join(fields) + "\n" + ",".join(values) + "\n"
+            ).encode()
+
+        self.updater(client=FakeClient(files)).install(REV, MREV)
+
+        release = self.release_dir(REV)
+        cards = json.loads(
+            (release / "assets" / "recognition" / "skill_cards.json").read_text("utf-8")
+        )
+        self.assertEqual(cards[0]["id"], 1)
+
+    def test_install_accepts_singular_upstream_skill_card_filename(self):
+        files = self.files.copy()
+        plural = "packages/gakumas-data/json/skill_cards.json"
+        singular = "packages/gakumas-data/json/skill_card.json"
+        files[singular] = files.pop(plural)
+
+        self.updater(client=FakeClient(files)).install(REV, MREV)
+
+        release = self.release_dir(REV)
+        self.assertTrue((release / "assets" / "recognition" / "skill_cards.json").is_file())
+        manifest = json.loads(
+            (release / "assets" / "recognition" / "manifest.json").read_text("utf-8")
+        )
+        self.assertEqual(manifest["files"]["skill_cards.json"]["upstream_path"], singular)
+
     def test_install_requires_explicit_40hex_revisions(self):
         updater = self.updater()
         for bad in ("main", REV.upper(), REV[:39], None, 123):

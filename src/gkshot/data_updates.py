@@ -54,6 +54,8 @@ inject deterministic behaviour.  No shell, npm or system Git is required.
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import os
 import re
@@ -126,6 +128,10 @@ TRUSTED_RUNTIME_FILES = ("worker.mjs", "reference.mjs", "package.json")
 
 CATALOG_SOURCE_DIR = "packages/gakumas-data/json"
 CATALOG_TABLES = ("skill_cards", "p_items", "stages", "customizations")
+# Some upstream snapshots use the singular spelling for the skill-card table.
+# The staged/runtime filename remains plural because that is the application
+# schema and the Node package imports ``skill_cards.json``.
+CATALOG_SOURCE_ALIASES = {"skill_cards": ("skill_cards.json", "skill_card.json")}
 TABLE_FIELDS = {
     "skill_cards": ("id", "name", "upgraded", "availableCustomizations"),
     "p_items": ("id", "name", "mode", "upgraded"),
@@ -293,6 +299,18 @@ def _read_json(path):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise DataUpdateError(f"无法读取 JSON：{path}：{error}") from error
+
+
+def _csv_json_bytes(raw: bytes) -> bytes:
+    rows = []
+    for row in csv.DictReader(io.StringIO(raw.decode("utf-8"))):
+        for key, value in row.items():
+            if value in ("TRUE", "FALSE"):
+                row[key] = value == "TRUE"
+            elif key != "availableCustomizations" and value.isnumeric():
+                row[key] = int(value)
+        rows.append(row)
+    return json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def _validate_url(url, allowed_hosts, label="下载地址") -> None:
@@ -863,7 +881,24 @@ class DataUpdater:
             destination = upstream.joinpath(*path.split("/"))
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
+        self._materialize_catalog_json(upstream)
         return index
+
+    @staticmethod
+    def _materialize_catalog_json(upstream: Path) -> None:
+        data_root = upstream / "packages" / "gakumas-data"
+        csv_root = data_root / "csv"
+        json_root = data_root / "json"
+        if not csv_root.is_dir():
+            return
+        json_root.mkdir(parents=True, exist_ok=True)
+        for source in sorted(csv_root.glob("*.csv")):
+            target = json_root / f"{source.stem}.json"
+            if not target.exists():
+                try:
+                    target.write_bytes(_csv_json_bytes(source.read_bytes()))
+                except (OSError, UnicodeDecodeError, csv.Error, ValueError) as error:
+                    raise DataUpdateError(f"目录 {source.stem} 无法由 CSV 生成：{error}") from error
 
     def _bundled_upstream_bytes(self, path: str):
         candidate = self.bundled_root / "runtime" / "node" / "upstream" / Path(path)
@@ -944,14 +979,29 @@ class DataUpdater:
         recognition.mkdir(parents=True, exist_ok=True)
         data_dir = stage / "runtime" / "node" / "upstream" / Path(CATALOG_SOURCE_DIR)
         tables = {}
+        source_names = {}
         for name in CATALOG_TABLES:
-            source = data_dir / (name + ".json")
-            if not source.is_file():
-                raise DataUpdateError(f"上游缺少目录文件：{name}.json")
+            candidates = CATALOG_SOURCE_ALIASES.get(name, (name + ".json",))
+            source_name = next((candidate for candidate in candidates
+                                if (data_dir / candidate).is_file()), None)
+            if source_name is None and (data_dir.parent / "csv" / f"{name}.csv").is_file():
+                source_name = f"../csv/{name}.csv"
+            if source_name is None:
+                raise DataUpdateError(f"上游缺少目录文件：{candidates[0]}")
+            source = data_dir / source_name
+            source_names[name] = (
+                f"{CATALOG_SOURCE_DIR}/{source_name}"
+                if not source_name.startswith("../")
+                else f"packages/gakumas-data/csv/{name}.csv"
+            )
             raw = source.read_bytes()
             try:
-                rows = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError) as error:
+                if source.suffix == ".csv":
+                    raw = _csv_json_bytes(raw)
+                    rows = json.loads(raw.decode("utf-8"))
+                else:
+                    rows = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError, csv.Error) as error:
                 raise DataUpdateError(f"目录 {name} 无法解析：{error}") from error
             _validate_catalog_table(name, rows)
             tables[name] = rows
@@ -968,7 +1018,7 @@ class DataUpdater:
             files[name + ".json"] = {
                 "sha256": _sha256_file(path),
                 "size": path.stat().st_size,
-                "upstream_path": f"{CATALOG_SOURCE_DIR}/{name}.json",
+                "upstream_path": source_names[name],
             }
         for rel, upstream_path in icon_entries.items():
             path = recognition / rel
