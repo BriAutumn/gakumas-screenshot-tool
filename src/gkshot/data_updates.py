@@ -36,6 +36,12 @@ Safety properties implemented here:
   explicit revision and verified against their Git blob SHA-1 *and* tree size --
   the rate-limited base64 ``git/blobs`` API is never used; only small metadata
   (default branch, commit SHA, recursive tree) touches the API host;
+* upstream stopped committing ``packages/gakumas-data/json/*.json``; every
+  ``packages/gakumas-data/csv/*.csv`` table is converted *before* the runtime
+  manifest is written (see :meth:`DataUpdater._materialize_json_tables`), so the
+  generated JSON siblings are covered by the release inventory and by the
+  runtime manifest the engine verifies; upstream JSON is preferred and never
+  rewritten;
 * every catalog id gets a real icon plan built from the fetched engine tree; a
   known bundled icon is retained byte-for-byte when upstream is unavailable, so
   existing icons never regress, and only genuinely absent icons are warned about;
@@ -53,7 +59,9 @@ inject deterministic behaviour.  No shell, npm or system Git is required.
 """
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -124,7 +132,10 @@ RUNTIME_EXTRA_FILES = (
 #: Trusted local files taken from the bundled runtime, never from upstream.
 TRUSTED_RUNTIME_FILES = ("worker.mjs", "reference.mjs", "package.json")
 
+#: Directory the engine runtime imports its data tables from.
 CATALOG_SOURCE_DIR = "packages/gakumas-data/json"
+#: Authoritative upstream table sources; converted into ``CATALOG_SOURCE_DIR``.
+CSV_SOURCE_DIR = "packages/gakumas-data/csv"
 CATALOG_TABLES = ("skill_cards", "p_items", "stages", "customizations")
 TABLE_FIELDS = {
     "skill_cards": ("id", "name", "upgraded", "availableCustomizations"),
@@ -155,6 +166,8 @@ YAML_TABLES = (
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _SHA1_RE = re.compile(r"[0-9a-f]{40}\Z")
+#: Table file stems we are willing to write as ``json/<name>.json``.
+_TABLE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 
 class DataUpdateError(ValueError):
@@ -293,6 +306,105 @@ def _read_json(path):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise DataUpdateError(f"无法读取 JSON：{path}：{error}") from error
+
+
+# ---------------------------------------------------------------------------
+# CSV -> JSON conversion
+#
+# Upstream used to commit ``packages/gakumas-data/json/*.json`` generated from
+# ``packages/gakumas-data/csv/*.csv`` by ``scripts/csv_to_json.py``.  The
+# committed JSON is gone, so the same conversion is reproduced here (stdlib
+# only, deterministic) for *every* upstream CSV table before the
+# runtime manifest is written.
+# ---------------------------------------------------------------------------
+def _decode_csv_text(table: str, raw: bytes) -> str:
+    """Decode UTF-8, preserving quoted field newlines like the current JS loader."""
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise DataUpdateError(f"CSV 表 {table} 不是合法的 UTF-8：{error}") from error
+    return text
+
+
+def _csv_value(value, table: str, line: int, column: str):
+    """Upstream scalar rule: ``TRUE``/``FALSE`` -> bool, digits -> int, else str."""
+    if value in ("TRUE", "FALSE"):
+        return value == "TRUE"
+    if re.fullmatch(r"[0-9]+", value):
+        try:
+            return int(value)
+        except ValueError as error:  # e.g. Unicode numerics ``int()`` rejects
+            raise DataUpdateError(
+                f"CSV 表 {table} 第 {line} 行 {column!r} 的数值无法解析：{value!r}"
+            ) from error
+    return value
+
+
+def _parse_csv_table(table: str, raw: bytes) -> list:
+    """Convert one upstream CSV blob into the row list upstream would emit.
+
+    Quotes, embedded commas and embedded newlines are supported by the stdlib
+    parser; BOMs are stripped.  Invalid headers/rows raise ``DataUpdateError``
+    instead of being silently dropped or guessed.
+    """
+    text = _decode_csv_text(table, raw)
+    reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
+    try:
+        headers = reader.fieldnames
+    except csv.Error as error:
+        raise DataUpdateError(f"CSV 表 {table} 的表头无法解析：{error}") from error
+    if not headers:
+        raise DataUpdateError(f"CSV 表 {table} 缺少表头。")
+    seen = set()
+    for header in headers:
+        if not isinstance(header, str) or not header:
+            raise DataUpdateError(f"CSV 表 {table} 含空表头。")
+        if header != header.strip():
+            raise DataUpdateError(f"CSV 表 {table} 的表头含多余空白：{header!r}")
+        if header in seen:
+            raise DataUpdateError(f"CSV 表 {table} 含重复表头：{header!r}")
+        seen.add(header)
+    rows = []
+    while True:
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        except csv.Error as error:
+            raise DataUpdateError(
+                f"CSV 表 {table} 第 {reader.line_num} 行无法解析：{error}"
+            ) from error
+        line = reader.line_num
+        if None in row:
+            raise DataUpdateError(f"CSV 表 {table} 第 {line} 行的字段多于表头。")
+        missing = [key for key, value in row.items() if value is None]
+        if missing:
+            raise DataUpdateError(
+                f"CSV 表 {table} 第 {line} 行缺少字段：{', '.join(missing)}。"
+            )
+        rows.append({key: _csv_value(value, table, line, key) for key, value in row.items()})
+    return rows
+
+
+def _encode_json_table(rows) -> bytes:
+    """Serialise generated catalogs deterministically as compact UTF-8."""
+    return json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _validate_generated_table(table: str, rows) -> None:
+    """Reject a converted table whose ids cannot be used as simulator keys."""
+    if not isinstance(rows, list) or not rows:
+        raise DataUpdateError(f"CSV 表 {table} 未产生任何数据行。")
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise DataUpdateError(f"CSV 表 {table} 含非对象行。")
+        entity_id = row.get("id")
+        if isinstance(entity_id, bool) or not isinstance(entity_id, int) or entity_id <= 0:
+            raise DataUpdateError(f"CSV 表 {table} 含非法 ID：{entity_id!r}")
+        if entity_id in seen:
+            raise DataUpdateError(f"CSV 表 {table} 含重复 ID：{entity_id}")
+        seen.add(entity_id)
 
 
 def _validate_url(url, allowed_hosts, label="下载地址") -> None:
@@ -939,15 +1051,60 @@ class DataUpdater:
             (target_dir / name).write_bytes(source.read_bytes())
 
     # -- catalog + icons ---------------------------------------------------
+    def _materialize_json_tables(self, data_dir: Path) -> dict:
+        """Generate every missing ``json/<table>.json`` from the upstream CSVs.
+
+        Upstream no longer commits ``packages/gakumas-data/json/*.json``; the
+        authoritative tables are ``packages/gakumas-data/csv/*.csv``.  *All*
+        tables are converted -- not only the four recognition tables -- because
+        the engine runtime imports ``p_idols``/``idols``/``p_drinks`` and the
+        native mapping builder needs ``p_idols`` and ``idols``.
+
+        Existing upstream JSON always wins and is never rewritten.  The
+        conversion is deterministic (sorted table discovery, header-ordered
+        keys, compact UTF-8 like upstream ``csv_to_json.py``) and every table is
+        validated, so invalid headers/rows abort the install instead of being
+        dropped.  Called before the runtime manifest is written, so the
+        generated bytes are covered by the runtime manifest *and* by the
+        release inventory.
+
+        Returns ``{table: upstream csv path}`` for the tables that were
+        generated from CSV.
+        """
+        csv_dir = data_dir.parent / "csv"
+        if not csv_dir.is_dir():
+            return {}
+        generated = {}
+        for rel, path in sorted(_walk_files(csv_dir).items()):
+            if "/" in rel:
+                raise DataUpdateError(f"上游 csv 目录含子目录，无法确定表名：{rel!r}")
+            if not rel.endswith(".csv"):
+                continue
+            table = rel[: -len(".csv")]
+            if not _TABLE_NAME_RE.fullmatch(table):
+                raise DataUpdateError(f"上游 CSV 表名不合法：{rel!r}")
+            target = data_dir / (table + ".json")
+            if target.is_file():
+                # Upstream JSON is authoritative; never rewrite it.
+                continue
+            rows = _parse_csv_table(table, path.read_bytes())
+            _validate_generated_table(table, rows)
+            _atomic_write_bytes(target, _encode_json_table(rows))
+            generated[table] = f"{CSV_SOURCE_DIR}/{rel}"
+        return generated
+
     def _stage_recognition(self, stage: Path, revision: str, index: dict) -> dict:
         recognition = stage / "assets" / "recognition"
         recognition.mkdir(parents=True, exist_ok=True)
         data_dir = stage / "runtime" / "node" / "upstream" / Path(CATALOG_SOURCE_DIR)
+        generated = self._materialize_json_tables(data_dir)
         tables = {}
         for name in CATALOG_TABLES:
             source = data_dir / (name + ".json")
             if not source.is_file():
-                raise DataUpdateError(f"上游缺少目录文件：{name}.json")
+                raise DataUpdateError(
+                    f"上游缺少目录文件：{name}.json，且 csv 目录中没有可转换的 {name}.csv"
+                )
             raw = source.read_bytes()
             try:
                 rows = json.loads(raw.decode("utf-8"))
@@ -968,7 +1125,7 @@ class DataUpdater:
             files[name + ".json"] = {
                 "sha256": _sha256_file(path),
                 "size": path.stat().st_size,
-                "upstream_path": f"{CATALOG_SOURCE_DIR}/{name}.json",
+                "upstream_path": generated.get(name, f"{CATALOG_SOURCE_DIR}/{name}.json"),
             }
         for rel, upstream_path in icon_entries.items():
             path = recognition / rel
@@ -987,12 +1144,18 @@ class DataUpdater:
             "stages": len(tables["stages"]),
             "customizations": len(tables["customizations"]),
         }
+        # Idol data is required by the native mapping builder; never report a
+        # silent zero when the table is missing or unreadable.
         p_idols = data_dir / "p_idols.json"
-        if p_idols.is_file():
-            try:
-                counts["idols"] = len(json.loads(p_idols.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                counts["idols"] = 0
+        if not p_idols.is_file():
+            raise DataUpdateError("上游缺少偶像目录 p_idols.json / p_idols.csv，拒绝继续。")
+        try:
+            rows = json.loads(p_idols.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise DataUpdateError(f"偶像目录 p_idols.json 无法解析：{error}") from error
+        if not isinstance(rows, list) or not rows:
+            raise DataUpdateError("偶像目录 p_idols.json 必须是非空列表。")
+        counts["idols"] = len(rows)
         return counts
 
     def _read_bundled_recognition_manifest(self) -> dict:

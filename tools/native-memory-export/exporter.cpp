@@ -6,7 +6,7 @@
 //
 // Public entrypoint: void StartMemoryExportOnce() (C++ linkage).
 //
-// DIAGNOSTIC PATCH (plugin_version 1.0.7-diagnostic)
+// DIAGNOSTIC PATCH (plugin_version 1.0.8-inventory)
 // --------------------------------------------------
 // The shipped exporter could remain "running" past its 180s cooperative timeout
 // when a single native IL2CPP call blocked. This patch adds:
@@ -472,7 +472,7 @@ void WriteResults(const ExportResult& r, const std::string& phase, bool terminal
     if (completed && hash.empty()) { status = "io_error"; completed = false; }
 
     std::string statusJson =
-        std::string("{\"schema_version\":2,\"plugin_version\":\"1.0.7-diagnostic\",\"snapshot_sha256\":\"") + hash +
+        std::string("{\"schema_version\":2,\"plugin_version\":\"1.0.8-inventory\",\"snapshot_sha256\":\"") + hash +
         "\",\"status\":\"" + JsonEscape(status) +
         "\",\"message\":\"" + JsonEscape(message) +
         "\",\"records\":" + std::to_string(lateSuccess ? 0 : r.records) +
@@ -627,6 +627,16 @@ void SerializeItemIds(void* item, const Field& fids, RecBuf& rb) {
     rb.oss << "]";
 }
 
+// ---- read-only card inventory sidecar --------------------------------------
+//
+// Included here (after the serialization/publication helpers above and before
+// ExportWorker below) so the sidecar may reuse the existing reflection,
+// serialization and publication primitives plus g_publishMutex. All of its
+// state and functions live in this anonymous namespace. The sidecar only probes
+// (never blocks) inside the existing memory readiness loop and reuses the same
+// 180s budget.
+#include "inventory-export.h"
+
 // ---- worker -----------------------------------------------------------------
 
 unsigned __stdcall ExportWorker(void*) {
@@ -640,8 +650,12 @@ unsigned __stdcall ExportWorker(void*) {
     gkdiag::Log().Checkpoint("startup");
 
     // Marks the worker finished and wakes the watchdog on every return path.
+    // The inventory sidecar is finished here too: a worker that leaves without a
+    // terminal inventory result records a fixed "not_loaded" status, and an
+    // already published terminal inventory result is never overwritten.
     struct DoneGuard {
         ~DoneGuard() {
+            FinishInventoryIfPending();
             g_workerFinished.store(true, std::memory_order_release);
             if (g_workerDoneEvent) SetEvent(g_workerDoneEvent);
         }
@@ -653,6 +667,29 @@ unsigned __stdcall ExportWorker(void*) {
     res.status = "running";
     res.message = "waiting for game data (maximum 180 seconds)";
     WriteResults(res, gkdiag::Log().LastPhaseSummary(), false);
+
+    // Independent inventory sidecar: its own running status, published without
+    // touching any game API and without consulting g_terminalPublished.
+    StartCardInventoryStatus();
+
+    // Inventory sidecar targets. Declared before every return path (so the
+    // DoneGuard can finish the sidecar) and assigned once the manager instance
+    // resolves, so a caught ordinary memory error can still finish the
+    // inventory export.
+    void* inventoryManager      = nullptr;
+    void* inventoryManagerClass = nullptr;
+    bool  inventoryTerminal     = false;
+
+    // Called only AFTER the memory result has already been published: finishes a
+    // still-pending inventory with the bounded remainder of the same budget.
+    auto finishInventoryAfterMemory = [&]() {
+        if (inventoryTerminal) return;
+        if (g_inventoryTerminalPublished.load(std::memory_order_acquire)) { inventoryTerminal = true; return; }
+        if (!inventoryManager || !inventoryManagerClass) return;
+        const InventoryExportResult inventory = FinishCardInventory(inventoryManager, inventoryManagerClass);
+        inventoryTerminal = inventory.terminal;
+        gkdiag::Log().Checkpoint("inventory_finished", InventoryPhaseLabel(inventory.status));
+    };
 
     // Phase 1: native readiness gate. No IL2CPP API is touched until the
     // application-specific late module is observed, bounded by the same overall
@@ -672,6 +709,7 @@ unsigned __stdcall ExportWorker(void*) {
         res.records      = 0;
         res.dataComplete = false;
         WriteResults(res, gkdiag::Log().LastPhaseSummary(), true);
+        finishInventoryAfterMemory();
         return 0;
     }
     gkdiag::Log().Checkpoint("native_runtime_signal_seen");
@@ -718,6 +756,7 @@ unsigned __stdcall ExportWorker(void*) {
             res.status  = "not_loaded";
             res.message = "GameAssembly/Assembly-CSharp not ready within timeout";
             WriteResults(res, gkdiag::Log().LastPhaseSummary(), true);
+            finishInventoryAfterMemory();
             return 0;
         }
         gkdiag::Log().Checkpoint("assembly_image_ready");
@@ -749,6 +788,7 @@ unsigned __stdcall ExportWorker(void*) {
             res.records      = 0;
             res.dataComplete = false;
             WriteResults(res, gkdiag::Log().LastPhaseSummary(), true);
+            finishInventoryAfterMemory();
             return 0;
         }
 
@@ -764,6 +804,15 @@ unsigned __stdcall ExportWorker(void*) {
         void* managerClass = g_api.object_get_class(manager);
         if (!managerClass) throw std::runtime_error("manager class missing");
 
+        // Read-only card inventory targets: recorded after the runtime gate and
+        // the single thread attach and before the existing memory getter/read.
+        // The sidecar itself is only probed (at most one pair read per memory
+        // polling iteration, never a blocking export), so an unavailable
+        // inventory can never consume the memory export's budget.
+        inventoryManager      = manager;
+        inventoryManagerClass = managerClass;
+        gkdiag::Log().Checkpoint("inventory_probe_ready");
+
         void* getUserMemoryList = FindMethodInHierarchy(managerClass, "get_UserMemoryList", 0);
         if (!getUserMemoryList)
             getUserMemoryList = FindMethodInHierarchy(managerClass, "get__userMemoryList", 0);
@@ -774,6 +823,18 @@ unsigned __stdcall ExportWorker(void*) {
         int32_t total = 0;
 
         while (GetTickCount() - t0 < kMaxWaitMs) {
+            // Opportunistic, non-blocking inventory probe: at most ONE pair read
+            // per iteration, no Sleep and no loop inside the probe. A terminal
+            // inventory result stops further probing only; the memory poll below
+            // and the memory protocol are untouched.
+            if (!inventoryTerminal && !g_inventoryTerminalPublished.load(std::memory_order_acquire)) {
+                const InventoryExportResult probe = ProbeCardInventory(inventoryManager, inventoryManagerClass);
+                if (probe.terminal) {
+                    inventoryTerminal = true;
+                    gkdiag::Log().Checkpoint("inventory_terminal", InventoryPhaseLabel(probe.status));
+                }
+            }
+
             gkdiag::Log().Checkpoint("getter_user_memory_list");
             auto rColl = Invoke(getUserMemoryList, manager, nullptr);
             if (!rColl.exc.empty()) throw std::runtime_error("UserMemoryList exc: " + rColl.exc);
@@ -811,6 +872,7 @@ unsigned __stdcall ExportWorker(void*) {
             res.records      = 0;
             res.dataComplete = false;
             WriteResults(res, gkdiag::Log().LastPhaseSummary(), true);
+            finishInventoryAfterMemory();
             return 0;
         }
         (void)coll;
@@ -947,6 +1009,7 @@ unsigned __stdcall ExportWorker(void*) {
     // out (including the catch paths above); there is no explicit detach here.
     gkdiag::Log().Checkpoint("result_write", res.status.c_str());
     WriteResults(res, gkdiag::Log().LastPhaseSummary(), true);
+    finishInventoryAfterMemory();
     return 0;
 }
 
@@ -974,6 +1037,11 @@ unsigned __stdcall WatchdogWorker(void*) {
     res.records      = 0;
     res.dataComplete = false;
     WriteResults(res, lastPhase, true);
+
+    // Independent inventory deadline publication. Called after WriteResults has
+    // released g_publishMutex (never inside it) and cannot replace an inventory
+    // result that already completed.
+    PublishCardInventoryTimeout();
     return 0;
 }
 
@@ -1058,6 +1126,9 @@ extern "C" __declspec(dllexport) void StartMemoryExportOnce() {
         res.records      = 0;
         res.dataComplete = false;
         WriteResults(res, gkdiag::Log().LastPhaseSummary(), true);
+        // The worker never entered, so no inventory running status exists:
+        // publish one independent terminal inventory error as well.
+        PublishCardInventoryNotStarted();
         return;
     }
     gkearly::Log("worker_beginthreadex_ok");
