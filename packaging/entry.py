@@ -25,10 +25,10 @@ def main():
     args = parser.parse_args()
     if args.user_home: os.environ['GKTOOL_USER_HOME'] = str(args.user_home.resolve())
     from gkshot.app_paths import USER_ROOT, RESOURCE_ROOT
-    from gkshot.simulation import atomic_json
     USER_ROOT.mkdir(parents=True, exist_ok=True)
     if args.plugin_action:
         from gkshot.plugin_manager import PluginManager
+        from gkshot.simulation import atomic_json
         try:
             if not args.game_dir: raise ValueError('缺少游戏目录')
             result = getattr(PluginManager(RESOURCE_ROOT / 'assets/plugin', USER_ROOT), args.plugin_action)(args.game_dir)
@@ -44,6 +44,7 @@ def main():
         from gkshot.plugin_manager import PluginManager
         from gkshot.native_service import NativeService
         from gkshot.data_updates import DataUpdater
+        from gkshot.simulation import atomic_json
         import yaml
         catalog = Catalog()
         PluginManager(RESOURCE_ROOT / 'assets/plugin', USER_ROOT)._load_bundle()
@@ -62,25 +63,17 @@ def main():
         return 0
     if args.serve_only:
         from gkshot.simulation_web import SimulationServer
+        from gkshot.simulation import atomic_json
         with SimulationServer(('127.0.0.1', args.port)) as server:
             atomic_json(USER_ROOT / 'service.json', {'origin':server.origin,'token':server.token,'pid':os.getpid()})
             server.serve_forever()
         return 0
     if getattr(sys, 'frozen', False) and not args.active_child and not args.baseline:
-        from gkshot.program_updates import _read_pointer, _verify_staged
-        pointer = _read_pointer(USER_ROOT / 'program-active.json')
-        active = pointer and pointer.get('active')
-        if active:
-            directory = Path(active['directory']).resolve()
-            updates = (USER_ROOT / 'program-updates').resolve()
-            if directory == updates or not directory.is_relative_to(updates): raise ValueError('更新目录不合法')
-            verified = _verify_staged(directory)
-            if verified['manifest_sha256'] != active['manifest_sha256']: raise ValueError('活动版本校验失败')
-            executable = directory / verified['manifest']['entrypoint']
-            if executable.resolve() != Path(sys.executable).resolve():
-                subprocess.Popen([str(executable),'--active-child','--user-home',str(USER_ROOT),
-                    '--baseline-exe', str(Path(sys.executable).resolve())], creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-                return 0
+        from gkshot.program_updates import program_restart_command
+        command = program_restart_command(USER_ROOT, Path(sys.executable).resolve())
+        if Path(command[0]).resolve() != Path(sys.executable).resolve():
+            subprocess.Popen(command, creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            return 0
     from gkshot.launcher import launch
     launch(args.baseline_exe)
     return 0

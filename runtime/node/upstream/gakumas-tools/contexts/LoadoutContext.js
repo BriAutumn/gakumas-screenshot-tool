@@ -8,14 +8,21 @@ import {
   useRef,
   useState,
 } from "react";
-import { Stages } from "gakumas-data";
+import {
+  fixCustomizationGroups,
+  getDefaultParams,
+  getSimulatorUrl,
+  getStage,
+  knownStageId,
+} from "gakumas-loadout";
 import { usePathname } from "@/i18n/routing";
 import LoadoutUrlContext from "@/contexts/LoadoutUrlContext";
 import WorkspaceContext from "@/contexts/WorkspaceContext";
-import { getDefaultParams, getSimulatorUrl } from "@/utils/simulator";
-import { getMemoryParamContribution } from "@/utils/stamina";
-import { FALLBACK_STAGE } from "@/simulator/constants";
-import { fixCustomizations } from "@/utils/customizations";
+import {
+  getMemorySlotCustomizations,
+  setMemorySlot,
+} from "@/utils/memorySlots";
+import { synchronizeLinkLoadouts } from "@/utils/linkLoadouts";
 
 const LoadoutContext = createContext();
 
@@ -29,8 +36,11 @@ export function LoadoutContextProvider({ children }) {
 
   const initialLoadout = loadoutsFromUrl[0] || loadoutFromUrl;
 
-  const [memoryParams, setMemoryParams] = useState([null, null]);
+  const [memorySlots, setMemorySlots] = useState([null, null]);
   const [stageId, setStageId] = useState(initialLoadout.stageId);
+  const [enterPercents, setEnterPercents] = useState(
+    !!initialLoadout.enterPercents
+  );
   const [customStage, setCustomStage] = useState(null);
   const [supportBonus, setSupportBonus] = useState(initialLoadout.supportBonus);
   const [params, setParams] = useState(initialLoadout.params);
@@ -42,16 +52,12 @@ export function LoadoutContextProvider({ children }) {
     initialLoadout.customizationGroups
   );
 
-  let stage = FALLBACK_STAGE;
-  if (stageId == "custom") {
-    stage = customStage;
-  } else if (stageId) {
-    stage = Stages.getById(stageId);
-  }
+  const stage = getStage(stageId, customStage);
 
   const loadout = useMemo(
     () => ({
       stageId,
+      enterPercents,
       customStage: stageId == "custom" ? customStage : {},
       supportBonus,
       params,
@@ -61,6 +67,7 @@ export function LoadoutContextProvider({ children }) {
     }),
     [
       stageId,
+      enterPercents,
       customStage,
       supportBonus,
       params,
@@ -81,9 +88,12 @@ export function LoadoutContextProvider({ children }) {
   );
 
   const setLoadout = useCallback((loadout) => {
-    setStageId(loadout.stageId);
+    // Phase tabs set their own index right after this.
+    setCurrentLoadoutIndex(0);
+    setStageId(knownStageId(loadout.stageId));
+    setEnterPercents(!!loadout.enterPercents);
     if (loadout.stageId == "custom") {
-      let custom = loadout.customStage;
+      let custom = { ...loadout.customStage };
       if (Array.isArray(custom.firstTurns)) {
         const length = custom.firstTurns.length;
         custom.firstTurns = custom.firstTurns.reduce((acc, cur) => {
@@ -94,57 +104,42 @@ export function LoadoutContextProvider({ children }) {
       setCustomStage(custom);
     }
     setSupportBonus(loadout.supportBonus);
+    setMemorySlots([null, null]);
     setParams(loadout.params);
     setPItemIds(loadout.pItemIds);
     setSkillCardIdGroups(loadout.skillCardIdGroups);
-    if (loadout.customizationGroups) {
-      try {
-        setCustomizationGroups(
-          loadout.customizationGroups.map((g) => g.map(fixCustomizations))
-        );
-      } catch (e) {
-        console.error(e);
-      }
-    }
+    setCustomizationGroups(
+      fixCustomizationGroups(
+        loadout.skillCardIdGroups,
+        loadout.customizationGroups
+      )
+    );
   }, []);
 
   useEffect(() => {
     if (["sense", "logic", "anomaly"].includes(stage.plan)) {
       setPlan(stage.plan);
     }
-
-    if (stage.type !== "linkContest") return;
-    if (loadouts.length == stage.linkTurnCounts.length) return;
-
-    setLoadouts((cur) => {
-      const next = [...cur];
-      while (next.length < stage.linkTurnCounts.length) {
-        next.push(loadout);
-      }
-      return next;
-    });
   }, [stage]);
 
   // Update browser URL when the loadout changes
   useEffect(() => {
     if (pathname !== "/simulator") return;
     updateUrl(loadout, loadouts);
-  }, [loadout]);
+  }, [loadout, loadouts]);
 
   // Update link loadouts when loadout changes
   useEffect(() => {
     if (stage.type == "linkContest") {
-      setLoadouts((cur) => {
-        const next = [...cur];
-        next[currentLoadoutIndex] = loadout;
-        for (let i = 0; i < next.length; i++) {
-          next[i].stageId = loadout.stageId;
-          next[i].params = [...loadout.params.slice(0, 3), next[i].params[3]];
-        }
-        return next;
-      });
+      const phaseCount = Math.max(1, stage.linkTurnCounts.length);
+      setLoadouts((cur) =>
+        synchronizeLinkLoadouts(cur, loadout, currentLoadoutIndex, phaseCount)
+      );
+      if (currentLoadoutIndex >= phaseCount) {
+        setCurrentLoadoutIndex(phaseCount - 1);
+      }
     }
-  }, [loadout]);
+  }, [loadout, currentLoadoutIndex, stage]);
 
   useEffect(() => {
     // If fewer than 4 pItems, pad with 0s
@@ -155,13 +150,13 @@ export function LoadoutContextProvider({ children }) {
 
   const stageRef = useRef(stage);
   stageRef.current = stage;
-  const memoryParamsRef = useRef(memoryParams);
-  memoryParamsRef.current = memoryParams;
+  const memorySlotsRef = useRef(memorySlots);
+  memorySlotsRef.current = memorySlots;
   const paramsRef = useRef(params);
   paramsRef.current = params;
 
   const clear = useCallback(() => {
-    setMemoryParams([null, null]);
+    setMemorySlots([null, null]);
     setParams(getDefaultParams(stageRef.current));
     setPItemIds([0, 0, 0, 0]);
     setSkillCardIdGroups([
@@ -257,7 +252,13 @@ export function LoadoutContextProvider({ children }) {
     });
     setCustomizationGroups((cur) => {
       const updatedCustomizations = [...cur];
-      updatedCustomizations.splice(groupIndex, 0, []);
+      // One entry per card slot: replaceCustomizations and swapSkillCardIds
+      // index customizations as one flat list cut into groups of 6.
+      updatedCustomizations.splice(
+        groupIndex,
+        0,
+        Array.from({ length: 6 }, () => ({})),
+      );
       return updatedCustomizations;
     });
   }, []);
@@ -299,42 +300,22 @@ export function LoadoutContextProvider({ children }) {
     setStageId(stageId);
     setCustomStage(customStage);
     if (hasDefaultParams) {
-      const nextStage =
-        stageId == "custom" ? customStage : Stages.getById(stageId);
-      setParams(getDefaultParams(nextStage));
+      setParams(getDefaultParams(getStage(stageId, customStage)));
     }
   }, []);
 
   const setMemory = useCallback((memory, index) => {
     const stage = stageRef.current;
-    const memoryParams = memoryParamsRef.current;
     const multiplier = stage.type !== "linkContest" && index ? 0.2 : 1;
-
-    if (!memoryParams.some((p) => p)) {
-      setParams([0, 0, 0, 0]);
-    } else if (memoryParams[index]) {
-      // If there is currently a memory in that slot, remove its params
-      setParams((curParams) =>
-        curParams.map(
-          (p, i) =>
-            (p || 0) -
-            getMemoryParamContribution(memoryParams[index][i], multiplier),
-        )
-      );
-    }
-
-    // Set memory
-    setMemoryParams((cur) => {
-      const next = [...cur];
-      next[index] = memory.params;
-      return next;
-    });
-    setParams((curParams) =>
-      curParams.map(
-        (p, i) =>
-          (p || 0) + getMemoryParamContribution(memory.params[i], multiplier),
-      )
+    const applied = setMemorySlot(
+      { params: paramsRef.current, slots: memorySlotsRef.current },
+      index,
+      memory.params,
+      multiplier,
     );
+
+    setMemorySlots(applied.slots);
+    setParams(applied.params);
     if (index == 0) {
       setPItemIds(memory.pItemIds);
     }
@@ -345,7 +326,7 @@ export function LoadoutContextProvider({ children }) {
     });
     setCustomizationGroups((cur) => {
       const next = [...cur];
-      next[index] = memory.customizations || [];
+      next[index] = getMemorySlotCustomizations(memory);
       return next;
     });
   }, []);
@@ -356,6 +337,7 @@ export function LoadoutContextProvider({ children }) {
       setMemory,
       selectStage,
       setSupportBonus,
+      setEnterPercents,
       setParams,
       replacePItemId,
       swapPItemIds,

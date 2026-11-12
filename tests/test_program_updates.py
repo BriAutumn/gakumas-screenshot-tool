@@ -505,6 +505,20 @@ class ActivationTests(ProgramUpdateTestBase):
         self.assertEqual(pointer["previous"]["version"], "1.1.0")
         self.assertEqual(pointer["previous"]["directory"], first["directory"])
 
+    def test_restart_bypasses_old_bootstrap_when_an_update_is_active(self):
+        staged = self.stage_version("1.0.15.2")
+        baseline = self.user_home.parent / "old-bootstrap" / "GKMemoryTool.exe"
+        self.assertEqual(updates.program_restart_command(self.user_home, baseline),
+                         [str(baseline), "--user-home", str(self.user_home)])
+        directory = Path(staged["directory"])
+        updates.activate_staged(directory, self.user_home)
+        self.assertEqual(updates.program_restart_command(self.user_home, baseline),
+                         [str(directory / "GKMemoryTool.exe"), "--active-child", "--user-home",
+                          str(self.user_home), "--baseline-exe", str(baseline)])
+        (directory / "GKMemoryTool.exe").write_bytes(b"tampered")
+        with self.assertRaises(updates.ProgramUpdateError):
+            updates.program_restart_command(self.user_home, baseline)
+
     def test_repeated_activation_is_idempotent(self):
         first = self.stage_version("1.1.0")
         second = self.stage_version("1.2.0")

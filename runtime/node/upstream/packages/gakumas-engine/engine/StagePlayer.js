@@ -17,15 +17,16 @@ export default class StagePlayer {
         state = this.engine.executeDecision(state, decision);
       } catch (e) {
         let exception = e;
-        while (exception) {
+        while (true) {
           try {
             state = await this.strategy.handleException(
               exception,
               state,
               decision,
             );
-            exception = null;
+            break;
           } catch (newException) {
+            if (newException === exception) throw exception;
             exception = newException;
           }
         }
@@ -34,8 +35,8 @@ export default class StagePlayer {
 
     return {
       score: state[S.score],
-      logs: this.engine.logger.pickLogs(state),
-      graphData: state[S.graphData],
+      logs: this.engine.logger.getLogs(state),
+      graphData: this.engine.logger.getGraphData(state),
     };
   }
 }

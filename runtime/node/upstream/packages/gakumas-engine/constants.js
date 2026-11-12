@@ -1,4 +1,5 @@
 import { deserializeEffectSequence } from "gakumas-data";
+import { normalizeEffect } from "./normalizeEffect";
 
 export const DEBUG = false;
 
@@ -20,10 +21,7 @@ export const RARITIES = ["N", "R", "SR", "SSR", "L", "T"];
  */
 function parseEffect(effectStr, source) {
   const effects = deserializeEffectSequence(effectStr);
-  for (const effect of effects) {
-    effect.source = source;
-  }
-  return effects;
+  return effects.map((effect) => normalizeEffect({ ...effect, source }));
 }
 
 export const DEFAULT_EFFECTS = parseEffect(
@@ -167,6 +165,7 @@ export const ALL_FIELDS = [
   "goodConditionTurns",
   "goodConditionTurnsMultiplier",
   "goodConditionTurnsBuffs",
+  "goodConditionTurnsAdditionBuffs",
   "perfectConditionTurns",
   "concentration",
   "concentrationMultiplier",
@@ -185,6 +184,7 @@ export const ALL_FIELDS = [
   "fullPowerEffectBuffs",
   "cumulativeFullPowerCharge",
   "enthusiasm",
+  "enthusiasmExtensionTurns",
   "enthusiasmMultiplier",
   "enthusiasmBonusBuffs",
   "enthusiasmBuffs",
@@ -243,6 +243,36 @@ export const S = ALL_FIELDS.reduce((acc, cur, i) => {
   return acc;
 }, {});
 
+export const BUFF_LIST_FIELDS = [
+  S.scoreBuffs,
+  S.scoreDebuffs,
+  S.goodImpressionTurnsBuffs,
+  S.goodImpressionTurnsEffectBuffs,
+  S.goodImpressionTurnsTimesBuffs,
+  S.motivationBuffs,
+  S.motivationAdditionBuffs,
+  S.goodConditionTurnsBuffs,
+  S.goodConditionTurnsAdditionBuffs,
+  S.concentrationBuffs,
+  S.concentrationAdditionBuffs,
+  S.concentrationEffectBuffs,
+  S.enthusiasmBuffs,
+  S.enthusiasmBonusBuffs,
+  S.fullPowerChargeBuffs,
+  S.fullPowerEffectBuffs,
+  S.strengthEffectBuffs,
+];
+
+// Slots whose writers always replace the value rather than mutate it, so
+// copies of a state can share them.
+export const COPY_ON_WRITE_FIELDS = [
+  S.logs,
+  S.graphData,
+  S.turnTypes,
+  S.effectCounters,
+  ...BUFF_LIST_FIELDS,
+];
+
 export const GROWTH_FIELDS = [
   "g.score",
   "g.scoreTimes",
@@ -278,6 +308,7 @@ export const CARD_PILES = [
 export const COST_FIELDS = [
   S.stamina,
   S.goodConditionTurns,
+  S.perfectConditionTurns,
   S.concentration,
   S.goodImpressionTurns,
   S.motivation,
@@ -388,6 +419,7 @@ export const LOGGED_FIELDS = [
   S.motivation,
   S.prideTurns,
   S.enthusiasm,
+  S.enthusiasmExtensionTurns,
   S.fullPowerCharge,
   S.lockStanceTurns,
   S.halfCostTurns,

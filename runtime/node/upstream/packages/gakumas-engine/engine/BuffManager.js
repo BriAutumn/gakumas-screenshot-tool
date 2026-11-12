@@ -21,6 +21,10 @@ const BUFF_TYPES = [
   { action: "setMotivationBuff", field: S.motivationBuffs },
   { action: "setMotivationAdditionBuff", field: S.motivationAdditionBuffs },
   { action: "setGoodConditionTurnsBuff", field: S.goodConditionTurnsBuffs },
+  {
+    action: "setGoodConditionTurnsAdditionBuff",
+    field: S.goodConditionTurnsAdditionBuffs,
+  },
   { action: "setConcentrationBuff", field: S.concentrationBuffs },
   { action: "setConcentrationAdditionBuff", field: S.concentrationAdditionBuffs },
   { action: "setConcentrationEffectBuff", field: S.concentrationEffectBuffs },
@@ -113,6 +117,7 @@ export default class BuffManager extends EngineComponent {
     state[S.motivationBuffs] = [];
     state[S.motivationAdditionBuffs] = [];
     state[S.goodConditionTurnsBuffs] = [];
+    state[S.goodConditionTurnsAdditionBuffs] = [];
     state[S.concentrationBuffs] = [];
     state[S.concentrationAdditionBuffs] = [];
     state[S.concentrationEffectBuffs] = [];
@@ -138,14 +143,15 @@ export default class BuffManager extends EngineComponent {
     state[S.fullPowerCharge] = 0;
     state[S.cumulativeFullPowerCharge] = 0;
     state[S.enthusiasm] = 0;
+    state[S.enthusiasmExtensionTurns] = 0;
     state[S.strengthTimes] = 0;
     state[S.preservationTimes] = 0;
     state[S.fullPowerTimes] = 0;
     state[S.leisureTimes] = 0;
     state[S.stanceChangedByDirectEffectTimes] = 0;
 
-    // Buffs/debuffs protected from decrement
-    state[S.freshBuffs] = {};
+    // Bitmask over EOT_DECREMENT_FIELDS: buffs/debuffs protected from decrement
+    state[S.freshBuffs] = 0;
 
     // Deltas
     state[S.goodImpressionTurnsDelta] = 0;
@@ -164,10 +170,9 @@ export default class BuffManager extends EngineComponent {
   }
 
   setBuff(state, field, amount, turns, logLabel) {
-    // Buffs are shared by reference across states via cloneValue's
-    // shallow-slice array path, so instead of mutating an existing
-    // buff's amount we replace the entry with a fresh object.
-    const arr = state[field];
+    // Buff lists are copy-on-write.
+    const arr = state[field].slice();
+    state[field] = arr;
     const buffIndex = arr.findIndex((b) => b.turns == turns);
     if (buffIndex != -1) {
       const old = arr[buffIndex];
@@ -202,8 +207,9 @@ export default class BuffManager extends EngineComponent {
     // General buffs
     for (let i = 0; i < EOT_DECREMENT_FIELDS.length; i++) {
       const field = EOT_DECREMENT_FIELDS[i];
-      if (state[S.freshBuffs][field]) {
-        delete state[S.freshBuffs][field];
+      const bit = 1 << i;
+      if (state[S.freshBuffs] & bit) {
+        state[S.freshBuffs] &= ~bit;
       } else if (state[field]) {
         state[field]--;
       }
@@ -211,12 +217,10 @@ export default class BuffManager extends EngineComponent {
 
     for (const { field } of BUFF_TYPES) {
       const buffs = state[field];
+      if (!buffs.length) continue;
       const next = [];
       for (let i = 0; i < buffs.length; i++) {
         const b = buffs[i];
-        // Replace the entry with a decremented copy — buffs are shared
-        // by reference across states via cloneValue's shallow-slice
-        // array path.
         let nb;
         if (b.fresh) nb = { ...b, fresh: false };
         else if (b.turns) nb = { ...b, turns: b.turns - 1 };

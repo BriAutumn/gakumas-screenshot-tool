@@ -17,7 +17,7 @@ from gkshot.data_updates import DataUpdater
 from gkshot.native_service import NativeService
 from gkshot.plugin_manager import PluginManager, detect_game_dirs
 from gkshot.program_updates import (check_release, download_release, stage_archive,
-                                    activate_staged, rollback)
+                                    activate_staged, rollback, program_restart_command)
 from gkshot.simulation import atomic_json
 from gkshot.simulation_web import SimulationServer
 
@@ -510,9 +510,19 @@ class Launcher:
 
     def _closed(self):
         if self.restart:
-            command = [self.baseline_exe, '--user-home', str(self.home)]
-            if not getattr(sys, 'frozen', False): command.insert(1, str(RESOURCE_ROOT / 'packaging/entry.py'))
-            subprocess.Popen(command, creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            try:
+                if getattr(sys, 'frozen', False):
+                    command = program_restart_command(self.home, self.baseline_exe)
+                else:
+                    command = [self.baseline_exe, str(RESOURCE_ROOT / 'packaging/entry.py'),
+                               '--user-home', str(self.home)]
+                subprocess.Popen(command, creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            except (OSError, RuntimeError, ValueError) as error:
+                self.closing = False
+                for button in self.buttons:
+                    button.configure(state='normal')
+                self.message.set(f'无法重启工具：{error}')
+                return
         self.root.destroy()
 
 

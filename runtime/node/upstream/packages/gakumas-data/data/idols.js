@@ -1,4 +1,4 @@
-import IDOLS from "../json/idols.json";
+import IDOLS from "../csv/idols.csv";
 
 IDOLS.forEach((idol) => {
   idol._type = "idol";
@@ -7,7 +7,7 @@ IDOLS.forEach((idol) => {
 const IDOLS_BY_ID = IDOLS.reduce((acc, cur) => {
   acc[cur.id] = cur;
   return acc;
-}, {});
+}, Object.create(null));
 
 class Idols {
   static getAll() {

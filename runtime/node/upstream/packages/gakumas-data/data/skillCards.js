@@ -1,33 +1,40 @@
-import SKILL_CARDS from "../json/skill_cards.json";
+import SKILL_CARDS from "../csv/skill_cards.csv";
 import { getSkillCardContestPower } from "../utils/contestPower";
 import { deserializeEffectSequence } from "../utils/effects";
+import { lazyParse } from "../utils/lazyParse";
 
 SKILL_CARDS.forEach((skillCard) => {
   skillCard._type = "skillCard";
-  skillCard.availableCustomizations = skillCard.availableCustomizations
+  // A single id is parsed as a number, so split its string form.
+  skillCard.availableCustomizations = String(
+    skillCard.availableCustomizations ?? "",
+  )
     .split(",")
     .filter((c) => c);
+  skillCard.limit = skillCard.limit || null;
+  skillCard.pIdolId = skillCard.pIdolId || null;
+  skillCard.contestPower = getSkillCardContestPower(skillCard);
+});
+
+const parsed = lazyParse(SKILL_CARDS, (skillCard) => {
   skillCard.conditions = deserializeEffectSequence(skillCard.conditions);
   skillCard.cost = deserializeEffectSequence(skillCard.cost);
   skillCard.actions = deserializeEffectSequence(skillCard.actions);
-  skillCard.limit = skillCard.limit || null;
   skillCard.effects = deserializeEffectSequence(skillCard.effects);
-  skillCard.pIdolId = skillCard.pIdolId || null;
-  skillCard.contestPower = getSkillCardContestPower(skillCard);
 });
 
 const SKILL_CARDS_BY_ID = SKILL_CARDS.reduce((acc, cur) => {
   acc[cur.id] = cur;
   return acc;
-}, {});
+}, Object.create(null));
 
 class SkillCards {
   static getAll() {
-    return SKILL_CARDS;
+    return parsed.all();
   }
 
   static getById(id) {
-    return SKILL_CARDS_BY_ID[id];
+    return parsed.one(SKILL_CARDS_BY_ID[id]);
   }
 
   static getFiltered({
@@ -47,7 +54,7 @@ class SkillCards {
         return false;
       if (pIdolIds && !pIdolIds.includes(skillCard.pIdolId)) return false;
       return true;
-    });
+    }).map(parsed.one);
   }
 }
 

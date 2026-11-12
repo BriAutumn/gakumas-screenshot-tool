@@ -141,6 +141,9 @@ drawCard(2)
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`, `%=`.
 
+`floor(expression)` rounds a value down before score modifiers are applied,
+for example `score+=floor(cumulativeFullPowerCharge*0.6)`.
+
 ### Special actions (non-assignment)
 
 | Action                                    | DSL                                                                      |
@@ -163,7 +166,7 @@ Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`, `%=`.
 | 特定カードを保留 (全部)                   | `holdAll[...]`                                                           |
 | このカードを保留                          | `holdThis`                                                               |
 | 特定カードを無料で使用 (ランダム/全/選択) | `useRandomFree[...]` / `useAllFree[...]` / `useSelectedFree[...](, num)` |
-| 特定カードを除外                          | `removeAll[...]`                                                         |
+| 特定カードを除外 (ランダム)               | `removeRandom[...]`                                                      |
 | 保留カードを手札に移動                    | `moveHeldCardsToHand`                                                    |
 | 低下状態を解除                            | `removeDebuffs(n)`                                                       |
 | 指針を変更                                | `setStance(stance)`                                                      |
@@ -175,6 +178,7 @@ Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`, `%=`.
 | 好印象効果回数増加                        | `setGoodImpressionTurnsTimesBuff(amount, turns?)`                        |
 | やる気増加量増加                          | `setMotivationBuff(amount, turns?)`                                      |
 | 好調増加量増加                            | `setGoodConditionTurnsBuff(amount, turns?)`                              |
+| 好調増加量追加                            | `setGoodConditionTurnsAdditionBuff(amount, turns?)`                      |
 | 集中増加量増加                            | `setConcentrationBuff(amount, turns?)`                                   |
 | 集中強化                                  | `setConcentrationEffectBuff(amount, turns?)`                             |
 | 熱気増加量増加                            | `setEnthusiasmBuff(amount, turns?)`                                      |
@@ -222,8 +226,7 @@ if:countCards[hand | held] >= 3 { drawCard }
 
 | Function       | Meaning                                              |
 | -------------- | ---------------------------------------------------- |
-| `effect(name)` | カードが特定の効果（例: `score`, `setStance`）を持つ |
-| `baseId(n)`    | ベース ID が `n` のカード                            |
+| `effect(name)` | カードが特定の効果（例: `score`, `strength`）を持つ  |
 | `id(n)`        | ID が `n` のカード（強化前／後を区別）               |
 
 Example — move cards with ID 383 currently in deck or discards to hand:
@@ -379,6 +382,7 @@ They are also valid as assignment LHS unless marked read-only.
 | 全力値                         | `fullPowerCharge`              |
 | 累計全力値                     | `cumulativeFullPowerCharge`    |
 | 熱気                           | `enthusiasm`                   |
+| 熱意延長                       | `enthusiasmExtensionTurns`     |
 | 強気回数                       | `strengthTimes`                |
 | 温存回数                       | `preservationTimes`            |
 | のんびり回数                   | `leisureTimes`                 |

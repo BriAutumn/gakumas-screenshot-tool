@@ -50,12 +50,15 @@ export default class TurnManager extends EngineComponent {
     if (rand > firstTurns.vocal + firstTurns.dance) firstTurn = "visual";
     remainingTurns[firstTurn]--;
 
-    // Pick last 3 turns based on stage criteria
+    // Pick last turns based on stage criteria, one of each type with turns left
     const sortedTypes = Object.keys(criteria).sort(
       (a, b) => criteria[b] - criteria[a]
     );
-    const lastThreeTurns = sortedTypes.slice().reverse();
-    lastThreeTurns.forEach((t) => remainingTurns[t]--);
+    const lastTurns = sortedTypes
+      .slice()
+      .reverse()
+      .filter((type) => remainingTurns[type] > 0);
+    lastTurns.forEach((t) => remainingTurns[t]--);
 
     let randomTurns = [];
     for (let k in remainingTurns) {
@@ -65,7 +68,7 @@ export default class TurnManager extends EngineComponent {
     }
     shuffle(randomTurns);
 
-    return [firstTurn, ...randomTurns, ...lastThreeTurns];
+    return [firstTurn, ...randomTurns, ...lastTurns];
   }
 
   startTurn(state, forceInitialHand = false) {
@@ -79,6 +82,9 @@ export default class TurnManager extends EngineComponent {
 
     state[S.cardUsesRemaining] = 1;
     state[S.unfreshPhase] = true;
+
+    // "Next turn" reservations made while this turn starts belong to the next turn
+    const effectsBeforeTurnStart = state[S.effects].length;
 
     state[S.prevStance] = "none";
     this.engine.effectManager.triggerEffects(state, FULL_POWER_EFFECTS);
@@ -108,7 +114,12 @@ export default class TurnManager extends EngineComponent {
     }
 
     this.engine.effectManager.triggerEffectsForPhase(state, "afterStartOfTurn");
-    this.engine.effectManager.triggerEffectsForPhase(state, "turn");
+    this.engine.effectManager.triggerEffectsForPhase(
+      state,
+      "turn",
+      null,
+      effectsBeforeTurnStart
+    );
     this.engine.effectManager.triggerEffectsForPhase(state, "everyTurn");
     state[S.unfreshPhase] = false;
   }
@@ -142,7 +153,11 @@ export default class TurnManager extends EngineComponent {
     state[S.cardUsesRemaining] = 0;
     state[S.turnCardsUsed] = 0;
     state[S.turnCardsUpgraded] = 0;
-    state[S.enthusiasm] = 0;
+    if (state[S.enthusiasmExtensionTurns] > 0) {
+      state[S.enthusiasmExtensionTurns]--;
+    } else {
+      state[S.enthusiasm] = 0;
+    }
 
     this.engine.effectManager.decrementTtl(state);
     this.engine.effectManager.decrementDelay(state);

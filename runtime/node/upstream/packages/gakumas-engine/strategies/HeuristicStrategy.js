@@ -1,4 +1,4 @@
-import { G, S } from "../constants";
+import { G, GROWTH_FIELDS, S } from "../constants";
 import { deepCopy } from "../utils";
 import BaseStrategy from "./BaseStrategy";
 
@@ -16,6 +16,8 @@ function sumBuffWeight(buffs, turnsRemaining) {
   }
   return total;
 }
+
+const GROWTH_SCORE_MULTIPLIER_BY_INDEX = [];
 
 const GROWTH_SCORE_MULTIPLIERS = {
   [G["g.score"]]: 2,
@@ -35,6 +37,9 @@ const GROWTH_SCORE_MULTIPLIERS = {
   [G["g.scoreByGenki"]]: 20,
   [G["g.stanceLevel"]]: 2,
 };
+for (let k = 0; k < GROWTH_FIELDS.length; k++) {
+  GROWTH_SCORE_MULTIPLIER_BY_INDEX[k] = GROWTH_SCORE_MULTIPLIERS[k] || 1;
+}
 
 export default class HeuristicStrategy extends BaseStrategy {
   constructor(engine) {
@@ -91,7 +96,7 @@ export default class HeuristicStrategy extends BaseStrategy {
       this.rootEffectCount = state[S.effects].length;
     }
 
-    const logIndex = this.engine.logger.log(state, "hand", null);
+    const handLog = this.engine.logger.log(state, "hand", null);
 
     const futures = state[S.handCards].map((card) =>
       this.getFuture(state, card)
@@ -110,7 +115,7 @@ export default class HeuristicStrategy extends BaseStrategy {
       maxScore = this.getStateScore(nextState);
     }
 
-    this.engine.logger.logs[logIndex].data = {
+    handLog.data = {
       handCards: state[S.handCards].map((card) => ({
         id: state[S.cardMap][card].id,
         c: state[S.cardMap][card].c11n,
@@ -142,6 +147,7 @@ export default class HeuristicStrategy extends BaseStrategy {
     }
 
     let score = 0;
+    const previewScore = this.getStateScore(previewState);
 
     // Effects -- TODO: make this not suck
     const effectsDiff = previewState[S.effects].length - this.rootEffectCount;
@@ -170,8 +176,7 @@ export default class HeuristicStrategy extends BaseStrategy {
         null,
         true
       );
-      const scoreDelta =
-        this.getStateScore(postEffectState) - this.getStateScore(previewState);
+      const scoreDelta = this.getStateScore(postEffectState) - previewScore;
       score += 3 * scoreDelta * Math.min(limit, 6);
     }
 
@@ -184,7 +189,7 @@ export default class HeuristicStrategy extends BaseStrategy {
         Math.floor(previewState[S.turnsRemaining] / 13);
     }
 
-    score += this.getStateScore(previewState);
+    score += previewScore;
 
     this.depth--;
     return { score: Math.round(score), state: previewState };
@@ -199,6 +204,9 @@ export default class HeuristicStrategy extends BaseStrategy {
   }
 
   getStateScore(state) {
+    // After the last turn, resources and card plays are worth nothing.
+    if (state[S.turnsRemaining] == 0) return state[S.score];
+
     const sc = this._getScoringConfig(state);
     // Mirror multipliers on `this` so call-sites that read them (including
     // `getFuture`'s scoring adjustments) keep working unchanged.
@@ -266,6 +274,10 @@ export default class HeuristicStrategy extends BaseStrategy {
 
       //Enthusiasm
       score += state[S.enthusiasm] * 5;
+      score +=
+        state[S.enthusiasm] *
+        Math.min(state[S.enthusiasmExtensionTurns], turnsRemaining) *
+        5;
 
       // Full power charge
       score +=
@@ -348,6 +360,11 @@ export default class HeuristicStrategy extends BaseStrategy {
       sumBuffWeight(state[S.goodConditionTurnsBuffs], turnsRemaining) *
       sc.goodConditionTurnsMultiplier;
 
+    // Good condition turns addition buffs
+    score +=
+      sumBuffWeight(state[S.goodConditionTurnsAdditionBuffs], turnsRemaining) *
+      sc.goodConditionTurnsMultiplier;
+
     // Motivation buffs
     score +=
       sumBuffWeight(state[S.motivationBuffs], turnsRemaining) *
@@ -405,8 +422,11 @@ export default class HeuristicStrategy extends BaseStrategy {
     for (let i = 0; i < cardMap.length; i++) {
       const growth = cardMap[i].growth;
       if (!growth) continue;
-      for (let key in growth) {
-        growthScore += growth[key] * (GROWTH_SCORE_MULTIPLIERS[key] || 1);
+      for (let k = 0; k < GROWTH_FIELDS.length; k++) {
+        const value = growth[k];
+        if (value !== undefined) {
+          growthScore += value * GROWTH_SCORE_MULTIPLIER_BY_INDEX[k];
+        }
       }
     }
     return growthScore;
@@ -414,7 +434,7 @@ export default class HeuristicStrategy extends BaseStrategy {
 
   evaluateForHold(state, card) {
     let previewState = this.engine.getInitialState(true);
-    previewState[S.cardMap] = deepCopy(state[S.cardMap]);
+    previewState[S.cardMap] = state[S.cardMap].slice();
     this.engine.buffManager.setStance(previewState, "fullPower");
     previewState[S.nullifySelect] = 1;
     previewState = this.engine.useCard(previewState, card);
@@ -443,7 +463,27 @@ export default class HeuristicStrategy extends BaseStrategy {
     return this.pickCardsToHold(state, cards, num);
   }
 
+  // evaluateForHold scores a card in a fresh full-power state, but the
+  // selected use plays it in the real one, where a card whose conditions
+  // fail does nothing (and a paid use discards it). Pick among the cards
+  // whose conditions pass, if any do.
   pickCardsToUseFree(state, cards, num = 1) {
-    return this.pickCardsToHold(state, cards, num);
+    const playable = [];
+    for (let i = 0; i < cards.length; i++) {
+      const conditions = this.engine.cardManager.getConditions(state, cards[i]);
+      if (
+        conditions.every((condition) =>
+          this.engine.evaluator.evaluateCondition(state, condition),
+        )
+      ) {
+        playable.push(i);
+      }
+    }
+    if (!playable.length) return this.pickCardsToHold(state, cards, num);
+    return this.pickCardsToHold(
+      state,
+      playable.map((i) => cards[i]),
+      num,
+    ).map((j) => playable[j]);
   }
 }

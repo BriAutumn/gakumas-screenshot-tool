@@ -263,6 +263,31 @@ def _read_pointer(path):
     return data
 
 
+def active_program_executable(user_home):
+    """Resolve and verify the selected executable without loading simulation data."""
+    home = Path(user_home).resolve()
+    pointer = _read_pointer(program_active_path(home))
+    active = pointer and pointer.get("active")
+    if not active:
+        return None
+    directory = Path(active["directory"]).resolve()
+    updates = (home / PROGRAM_UPDATES_DIRNAME).resolve()
+    if directory == updates or not directory.is_relative_to(updates):
+        raise ProgramUpdateError("更新目录不合法")
+    verified = _verify_staged(directory)
+    if verified["manifest_sha256"] != active["manifest_sha256"]:
+        raise ProgramUpdateError("活动版本校验失败")
+    return directory / verified["manifest"]["entrypoint"]
+
+
+def program_restart_command(user_home, baseline_exe):
+    executable = active_program_executable(user_home)
+    if executable is None:
+        return [str(baseline_exe), "--user-home", str(user_home)]
+    return [str(executable), "--active-child", "--user-home", str(user_home),
+            "--baseline-exe", str(baseline_exe)]
+
+
 # --------------------------------------------------------------------------
 # HTTPS helpers (injectable for tests)
 # --------------------------------------------------------------------------
