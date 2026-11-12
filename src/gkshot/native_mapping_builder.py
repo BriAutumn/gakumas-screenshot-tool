@@ -23,6 +23,17 @@ CARD_ALIASES = {'p_card-02-ido-3_165': '夢と現境界線',
     'p_card-00-sup-3_155': '月明りに包まれて',
     'p_card-02-ido-3_086': '愛をこめて'}
 MISSING_PLUS = {'p_card-01-ido-1_058', 'p_card-02-ido-1_057'}
+# Confirmed against the same native IDs and upgrade levels in the live export.
+CARD_NAME_CORRECTIONS = {
+    325: ('初めての場所', '初めての場所+'),
+    327: ('初めてのご褒美', '初めてのご褒美+'),
+    464: ('愛をこめて', '愛を込めて'),
+    465: ('愛をこめて+', '愛を込めて+'),
+    586: ('月明りに包まれて', '月明かりに包まれて'),
+    587: ('月明りに包まれて+', '月明かりに包まれて+'),
+    729: ('夢と現境界線', '夢と現の境界線'),
+    730: ('夢と現境界線+', '夢と現の境界線+'),
+}
 
 def norm(text):
     return unicodedata.normalize('NFKC', text).replace('\\n', '').replace('\n', '').strip()
@@ -34,10 +45,12 @@ def write(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
-def build(source, cache, output, catalog_root=None, sim_data=None):
+def build(source, cache, output, catalog_root=None, sim_data=None, *, game_master=None):
     catalog = Catalog(catalog_root) if catalog_root else Catalog()
     hashes = {}
     def table(name):
+        if game_master is not None:
+            return game_master.read(name)
         raw = (source / (name + '.yaml')).read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
         hashes[name] = digest
@@ -56,7 +69,7 @@ def build(source, cache, output, catalog_root=None, sim_data=None):
     sim_data = sim_data or RUNTIME_ROOT / 'upstream/packages/gakumas-data/json'
     sim_idols = read(sim_data / 'p_idols.json')
     character_ids = dict(CHARACTERS)
-    if (source / 'Character.yaml').is_file():
+    if game_master is not None or (source / 'Character.yaml').is_file():
         sim_characters = collections.defaultdict(list)
         for row in read(sim_data / 'idols.json'):
             sim_characters[norm(row['name']).replace(' ', '')].append(row['id'])
@@ -75,17 +88,22 @@ def build(source, cache, output, catalog_root=None, sim_data=None):
     for card in cards:
         name = card['name']
         alias = CARD_ALIASES.get(card['id'])
-        lookup = (alias + '+' * card['upgradeCount']) if alias else name
-        if card['id'] in MISSING_PLUS and card['upgradeCount'] == 1:
-            lookup = name.removesuffix('+')
-        matches = [s for s in names[norm(lookup)]
+        matches = [s for s in names[norm(name)]
                    if s['upgraded'] == (card['upgradeCount'] > 0)]
+        basis = 'normalized-name-and-upgrade'
+        if not matches:
+            lookup = (alias + '+' * card['upgradeCount']) if alias else name
+            if card['id'] in MISSING_PLUS and card['upgradeCount'] == 1:
+                lookup = name.removesuffix('+')
+            if lookup != name:
+                matches = [s for s in names[norm(lookup)]
+                           if s['upgraded'] == (card['upgradeCount'] > 0)]
+                basis = 'reviewed-spelling-alias'
         sid = matches[0]['id'] if len(matches) == 1 else None
         key = card['id'] + ':' + str(card['upgradeCount'])
         if sid is not None:
             mapping['cards'].setdefault(card['id'], {})[str(card['upgradeCount'])] = sid
             pairs.append((card, matches[0]))
-        basis = 'reviewed-spelling-alias' if alias or card['id'] in MISSING_PLUS else 'normalized-name-and-upgrade'
         evidence['cards'][key] = {'basis': basis, 'sim_id': sid}
         inventory['cards'].append({'native_id': card['id'], 'upgrade': card['upgradeCount'],
             'native_name': name, 'sim_id': sid,
@@ -192,8 +210,11 @@ def build(source, cache, output, catalog_root=None, sim_data=None):
         evidence['customizations'][cid] = {'basis': basis, 'sim_id': sid}
 
     provenance = {'catalog_revision': catalog.manifest['revision'],
-        'source': 'https://github.com/vertesan/gakumasu-diff', 'source_sha256': hashes,
+        'source': 'local game master' if game_master is not None else 'https://github.com/vertesan/gakumasu-diff',
+        'source_sha256': {name: digest for name, digest in game_master.files.items()} if game_master is not None else hashes,
         'method': 'complete catalog inventory; identity names; exact effect signatures; option candidates marked separately'}
+    if game_master is not None:
+        provenance['game_master_snapshot'] = game_master.revision
     mapping['provenance'] = provenance
     mapping['evidence'] = evidence
     reverse = {}

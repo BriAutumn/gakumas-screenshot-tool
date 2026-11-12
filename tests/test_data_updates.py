@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from gkshot.game_master import TABLES as GAME_MASTER_TABLES, snapshot_id
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -197,8 +198,9 @@ class FakeClient:
 class StubUpdater(DataUpdater):
     """DataUpdater with the node-only validation seams overridden."""
 
-    def __init__(self, user_home, bundled_root, *, client=None, fail_tests=False, fail_smoke=False):
-        super().__init__(user_home, bundled_root)
+    def __init__(self, user_home, bundled_root, *, client=None, fail_tests=False, fail_smoke=False,
+                 game_master=False):
+        super().__init__(user_home, bundled_root, game_master=game_master)
         if client is not None:
             self._client = client
         self._fail_tests = fail_tests
@@ -307,8 +309,13 @@ class DataUpdateTestBase(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _fake_build(self, source, cache, output, catalog_root=None, sim_data=None):
-        self.builder_sources.append(Path(source))
+    def _fake_build(self, source, cache, output, catalog_root=None, sim_data=None, *, game_master=None):
+        if game_master is None:
+            self.builder_sources.append(Path(source))
+        else:
+            self.builder_sources.append(game_master.directory)
+            for name in GAME_MASTER_TABLES:
+                game_master.read(name)
         if self.builder_error:
             raise DataUpdateError("builder exploded")
         catalog_revision = json.loads((Path(catalog_root) / "manifest.json").read_text("utf-8"))["revision"]
@@ -530,6 +537,66 @@ class InstallSourceTests(DataUpdateTestBase):
         self.assertEqual(self.read_pointer()["active"]["revision"], REV)
 
 
+class GameMasterSyncTests(DataUpdateTestBase):
+    def publish_snapshot(self, value):
+        root = self.home / "native-export" / "game-master"
+        tables = {}
+        for name in GAME_MASTER_TABLES:
+            row = {"id": "native", "upgradeCount": 0, "customizeCount": 1, "type": "label",
+                   "name": value}
+            tables[name + ".json"] = jdump([row])
+        files = {name: hashlib.sha256(data).hexdigest() for name, data in tables.items()}
+        revision = snapshot_id(files)
+        folder = root / "snapshots" / revision
+        folder.mkdir(parents=True)
+        manifest = jdump({"schema_version": 1, "snapshot": revision, "files": files})
+        (root / "active.json").write_bytes(manifest)
+        (folder / "snapshot.json").write_bytes(manifest)
+        for name, data in tables.items():
+            (folder / name).write_bytes(data)
+        return revision, folder
+
+    def test_same_engine_can_install_new_game_snapshot_and_roll_back(self):
+        client = FakeClient(csv_source_files())
+        del client.branches[du.MASTER_REPOSITORY]
+        updater = self.updater(client=client, game_master=True)
+        first, _ = self.publish_snapshot("first")
+        self.assertEqual(updater.check()["master_revision"], first)
+        updater.install(REV, first)
+        from gkshot.resource_paths import resolve_paths
+        first_path = resolve_paths(self.home)[0]
+        self.assertFalse(updater.check()["update_available"])
+        second, _ = self.publish_snapshot("second")
+        self.assertTrue(updater.check()["update_available"])
+        updater.install(REV, second)
+        second_path = resolve_paths(self.home)[0]
+        self.assertNotEqual(first_path, second_path)
+        self.assertEqual(self.read_pointer()["active"]["game_master_snapshot"], second)
+        updater.rollback()
+        self.assertEqual(resolve_paths(self.home)[0], first_path)
+        self.assertTrue(all(repo == du.SOURCE_REPOSITORY for repo, _ in client.tree_calls))
+        self.assertTrue(all(repo == du.SOURCE_REPOSITORY for repo, _, _ in client.raw_calls))
+
+    def test_tampered_local_table_cannot_activate(self):
+        revision, folder = self.publish_snapshot("original")
+        (folder / "ProduceCard.json").write_bytes(b"[]")
+        updater = self.updater(client=FakeClient(csv_source_files()), game_master=True)
+        with self.assertRaisesRegex(DataUpdateError, r"ProduceCard.json.*校验失败"):
+            updater.install(REV, revision)
+        self.assertFalse(self.pointer_path().exists())
+
+    def test_no_game_export_can_update_with_existing_mapping(self):
+        old_idols = self.bundled / "runtime/node/upstream/packages/gakumas-data/json/p_idols.json"
+        old_idols.parent.mkdir(parents=True, exist_ok=True)
+        old_idols.write_bytes(jdump(P_IDOLS))
+        updater = self.updater(client=FakeClient(source_files()), game_master=True)
+        update = updater.check()
+        self.assertTrue(update["change_summary"]["uses_existing_mapping"])
+        updater.install(REV, update["master_revision"])
+        self.assertFalse(updater.check()["update_available"])
+        self.assertEqual(self.read_pointer()["active"]["revision"], REV)
+
+
 class CsvOnlySourceTests(DataUpdateTestBase):
     """Upstream no longer commits ``packages/gakumas-data/json/*.json``."""
 
@@ -555,6 +622,28 @@ class CsvOnlySourceTests(DataUpdateTestBase):
         csv_dir = self.release_dir(REV) / "runtime" / "node" / "upstream" / "packages" / "gakumas-data" / "csv"
         for name in CSV_FIELDS:
             self.assertEqual((csv_dir / (name + ".csv")).read_bytes(), files[f"{CSV_DIR}/{name}.csv"])
+
+    def test_description_csv_keeps_records_that_share_an_entity_id(self):
+        files = csv_source_files()
+        files[f"{CSV_DIR}/descriptions.csv"] = (
+            b"type,id,description\nskillCard,1,Card text\npItem,1,Item text\npDrink,1,Drink text\n"
+        )
+        self.updater(client=FakeClient(files)).install(REV, MREV)
+        path = self.upstream_json_dir(REV) / "descriptions.json"
+        self.assertEqual(json.loads(path.read_bytes()), [
+            {"type": "skillCard", "id": 1, "description": "Card text"},
+            {"type": "pItem", "id": 1, "description": "Item text"},
+            {"type": "pDrink", "id": 1, "description": "Drink text"},
+        ])
+
+    def test_duplicate_description_type_and_id_blocks_activation(self):
+        files = csv_source_files()
+        files[f"{CSV_DIR}/descriptions.csv"] = (
+            b"type,id,description\nskillCard,1,First\npItem,1,Item\nskillCard,1,Second\n"
+        )
+        with self.assertRaisesRegex(DataUpdateError, r"descriptions.*skillCard, 1"):
+            self.updater(client=FakeClient(files)).install(REV, MREV)
+        self.assertFalse(self.pointer_path().exists())
 
     def test_conversion_types_reach_the_runtime_tables(self):
         self.install_csv_only()

@@ -40,6 +40,9 @@ class PluginManagerTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
+        environment = mock.patch.dict(os.environ, {"APPDATA": str(self.root / "roaming")})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.home = self.root / "home"
         self.home.mkdir()
         self.game = self.root / "game"
@@ -324,6 +327,26 @@ class PluginManagerTests(unittest.TestCase):
         self.assertEqual(outside.read_bytes(), b"not ours")
 
     # -- detection ----------------------------------------------------------
+
+    def test_dmm_configuration_finds_game_even_when_closed(self):
+        dmm = self.root / "roaming" / "dmmgameplayer5"
+        dmm.mkdir(parents=True)
+        (dmm / "dmmgame.cnf").write_text(json.dumps({"contents": [
+            {"productId": "gakumas", "detail": {"path": str(self.game)}},
+        ]}), encoding="utf8")
+        with mock.patch.object(pm_mod, "_dmm_install_locations", return_value=[]), \
+                mock.patch.object(pm_mod, "_running_game_dir", return_value=None):
+            self.assertEqual(detect_game_dirs(self.home), [self.game_real])
+
+    def test_install_preserves_compatible_custom_ini(self):
+        config = self.game / "GKMemoryExport.ini"
+        original = f"[GKMemoryExport]\nExportDirectory={self.home / 'native-export'}\nContestProbe=1\n".encode()
+        config.write_bytes(original)
+        self.assertTrue(self.manager.install(self.game)["changed"])
+        self.assertFalse(self.manager.install(self.game)["changed"])
+        self.assertEqual(config.read_bytes(), original)
+        self.manager.uninstall(self.game)
+        self.assertEqual(config.read_bytes(), original)
 
     def test_detect_game_dirs_uses_settings(self):
         (self.home / "settings.json").write_text(

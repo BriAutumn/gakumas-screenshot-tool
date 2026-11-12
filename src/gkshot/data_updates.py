@@ -75,8 +75,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from gkshot import app_paths, resource_paths
 from gkshot.catalog import Catalog
+from gkshot.game_master import GameMasterError, GameMasterSnapshot
 from gkshot.models import Loadout
-from gkshot.native_mapping_builder import build as build_native_mapping
+from gkshot.native_mapping_builder import CARD_NAME_CORRECTIONS, build as build_native_mapping
+from gkshot.native_mapping_semantics import simulator_signature
 
 __all__ = [
     "DataUpdateError",
@@ -392,7 +394,7 @@ def _encode_json_table(rows) -> bytes:
 
 
 def _validate_generated_table(table: str, rows) -> None:
-    """Reject a converted table whose ids cannot be used as simulator keys."""
+    """Validate keys in CSV tables, including the scoped IDs in descriptions."""
     if not isinstance(rows, list) or not rows:
         raise DataUpdateError(f"CSV 表 {table} 未产生任何数据行。")
     seen = set()
@@ -402,6 +404,15 @@ def _validate_generated_table(table: str, rows) -> None:
         entity_id = row.get("id")
         if isinstance(entity_id, bool) or not isinstance(entity_id, int) or entity_id <= 0:
             raise DataUpdateError(f"CSV 表 {table} 含非法 ID：{entity_id!r}")
+        if table == "descriptions":
+            entity_type = row.get("type")
+            if not isinstance(entity_type, str) or not entity_type or entity_type != entity_type.strip():
+                raise DataUpdateError(f"CSV 表 {table} 的 ID {entity_id} 含非法 type：{entity_type!r}")
+            key = (entity_type, entity_id)
+            if key in seen:
+                raise DataUpdateError(f"CSV 表 {table} 含重复 type + ID：{entity_type}, {entity_id}")
+            seen.add(key)
+            continue
         if entity_id in seen:
             raise DataUpdateError(f"CSV 表 {table} 含重复 ID：{entity_id}")
         seen.add(entity_id)
@@ -660,10 +671,12 @@ def _validate_catalog_references(tables: dict) -> None:
 class DataUpdater:
     """Direct upstream updater for engine, catalog, icons and native mapping."""
 
-    def __init__(self, user_home=app_paths.USER_ROOT, bundled_root=app_paths.RESOURCE_ROOT, progress=None):
+    def __init__(self, user_home=app_paths.USER_ROOT, bundled_root=app_paths.RESOURCE_ROOT, progress=None,
+                 *, game_master=False):
         self.home = Path(user_home).resolve()
         self.bundled_root = Path(bundled_root).resolve()
         self._progress = progress
+        self._use_game_master = game_master
         self._client = GitHubClient()
         self._bytes_fetched = 0
         self._missing_icons = []
@@ -744,23 +757,43 @@ class DataUpdater:
         try:
             branch = self._client.default_branch(SOURCE_REPOSITORY)
             revision = self._client.commit_sha(SOURCE_REPOSITORY, branch)
-            master_branch = self._client.default_branch(MASTER_REPOSITORY)
-            master_revision = self._client.commit_sha(MASTER_REPOSITORY, master_branch)
+            if self._use_game_master:
+                snapshot = self._optional_game_master()
+            else:
+                master_branch = self._client.default_branch(MASTER_REPOSITORY)
+                snapshot = self._client.commit_sha(MASTER_REPOSITORY, master_branch)
         except DataUpdateError:
             raise
         except OSError as error:
             raise DataUpdateError(f"无法访问上游数据源：{error}") from error
-        return revision, master_revision
+        return revision, snapshot
+
+    def _optional_game_master(self):
+        try:
+            return self._game_master().revision
+        except DataUpdateError:
+            return "retained"
+
+    def _game_master(self, revision=None):
+        try:
+            return GameMasterSnapshot(self.home, revision)
+        except GameMasterError as error:
+            raise DataUpdateError(str(error)) from error
 
     def check(self) -> dict:
         current = self._current_revision()
         revision, master_revision = self._latest_revisions()
         update_available = revision != current
+        if self._use_game_master and master_revision != "retained":
+            pointer = self._read_pointer() or {}
+            active = pointer.get("active") or {}
+            update_available |= active.get("game_master_snapshot") != master_revision
         change_summary = {
             "current": current,
             "latest": revision,
             "master": master_revision,
             "update_available": update_available,
+            "uses_existing_mapping": master_revision == "retained",
             "message": "发现新的上游数据" if update_available else "当前已是最新数据",
         }
         return {
@@ -789,14 +822,23 @@ class DataUpdater:
     # -- install -----------------------------------------------------------
     def install(self, revision, master_revision) -> dict:
         rev = _require_revision(revision, "revision")
-        mrev = _require_revision(master_revision, "master_revision")
+        if self._use_game_master and master_revision == "retained":
+            mrev = master_revision
+        elif self._use_game_master:
+            if not isinstance(master_revision, str) or not _SHA256_RE.fullmatch(master_revision):
+                raise DataUpdateError("游戏主数据版本不合法，请重新检查同步。")
+            mrev = self._game_master(master_revision).revision
+        else:
+            mrev = _require_revision(master_revision, "master_revision")
         with self._exclusive_lock():
             return self._install_locked(rev, mrev)
 
     def _install_locked(self, revision: str, master_revision: str) -> dict:
         releases = self._releases_root()
         releases.mkdir(parents=True, exist_ok=True)
-        target = releases / revision
+        snapshot = master_revision if self._use_game_master and master_revision != "retained" else None
+        name = resource_paths.release_directory_name(revision, snapshot)
+        target = releases / name
         if target.exists():
             if not target.is_dir():
                 raise DataUpdateError(f"目标路径已存在且不是目录：{target}")
@@ -819,11 +861,11 @@ class DataUpdater:
         validation = record.get("validation") or {}
         if record.get("revision") != revision:
             raise DataUpdateError("已存在同目录但 revision 不一致的数据版本。")
-        if validation.get("source_master_revision") != master_revision:
+        if master_revision != "retained" and validation.get("source_master_revision") != master_revision:
             raise DataUpdateError("已存在同引擎版本但来源修订不一致的数据包，拒绝覆盖。")
         self._verify_release(target, revision)
         provenance = (_read_json(target / "assets" / "native" / "mapping.json").get("provenance") or {})
-        if provenance.get("master_revision") != master_revision:
+        if master_revision != "retained" and provenance.get("master_revision") != master_revision:
             raise DataUpdateError("既有版本的映射来源修订与请求不一致，拒绝复用。")
         if provenance.get("catalog_revision") != revision:
             raise DataUpdateError("既有版本的映射 catalog_revision 与请求不一致，拒绝复用。")
@@ -843,10 +885,12 @@ class DataUpdater:
             history = [{"revision": None}]
         entry = {
             "revision": revision,
-            "release": f"{RELEASES_RELATIVE_POSIX}/{revision}",
+            "release": f"{RELEASES_RELATIVE_POSIX}/{target.name}",
             "release_manifest_sha256": verified["release_manifest_sha256"],
         }
-        if history[-1].get("revision") == revision:
+        if verified["game_master_snapshot"] is not None:
+            entry["game_master_snapshot"] = verified["game_master_snapshot"]
+        if history[-1].get("release") == entry["release"]:
             history[-1] = entry
         else:
             history.append(entry)
@@ -872,7 +916,10 @@ class DataUpdater:
             revision = previous.get("revision")
             if revision:
                 _require_revision(revision, "revision")
-                self._verify_release(self._release_dir(revision), revision)
+                name = resource_paths.release_directory_name(revision, previous.get("game_master_snapshot"))
+                verified = self._verify_release(self._release_dir(name), revision)
+                if previous.get("release_manifest_sha256") != verified["release_manifest_sha256"]:
+                    raise DataUpdateError("回退版本的清单校验失败。")
             new_history = history[:-1]
             self._write_pointer(new_history)
             if revision:
@@ -908,6 +955,8 @@ class DataUpdater:
             "mapping_summary": info.get("summary") or {},
             "icons": {"missing": list(self._missing_icons)},
         }
+        if self._use_game_master and master_revision != "retained":
+            validation["game_master_snapshot"] = master_revision
         self._write_release(stage, revision, validation)
         return counts, info.get("summary") or {}
 
@@ -1062,9 +1111,10 @@ class DataUpdater:
 
         Existing upstream JSON always wins and is never rewritten.  The
         conversion is deterministic (sorted table discovery, header-ordered
-        keys, compact UTF-8 like upstream ``csv_to_json.py``) and every table is
-        validated, so invalid headers/rows abort the install instead of being
-        dropped.  Called before the runtime manifest is written, so the
+        keys, compact UTF-8 like upstream ``csv_to_json.py``). Invalid headers
+        and rows abort the install. Descriptions are keyed by type and ID;
+        other tables are keyed by ID.
+        Called before the runtime manifest is written, so the
         generated bytes are covered by the runtime manifest *and* by the
         release inventory.
 
@@ -1246,6 +1296,23 @@ class DataUpdater:
 
     # -- native mapping ----------------------------------------------------
     def _build_native_mapping(self, stage: Path, revision: str, master_revision: str) -> dict:
+        if self._use_game_master and master_revision == "retained":
+            return self._retain_native_mapping(stage, revision)
+        if self._use_game_master:
+            snapshot = self._game_master(master_revision)
+            output = stage / "assets" / "native"
+            try:
+                build_native_mapping(
+                    None, None, output,
+                    catalog_root=stage / "assets" / "recognition",
+                    sim_data=stage / "runtime" / "node" / "upstream" / Path(CATALOG_SOURCE_DIR),
+                    game_master=snapshot,
+                )
+            except (GameMasterError, KeyError, TypeError, ValueError) as error:
+                raise DataUpdateError(f"无法从游戏主数据生成映射：{error}") from error
+            return {"mapping": _read_json(output / "mapping.json"),
+                    "correspondence": _read_json(output / "full-correspondence.json"),
+                    "summary": _read_json(output / "mapping-summary.json")}
         entries = self._load_tree(MASTER_REPOSITORY, master_revision)
         index = self._index_tree(entries)
         # Multi-megabyte YAML must never end up inside the immutable release;
@@ -1287,6 +1354,53 @@ class DataUpdater:
         _atomic_write_json(output / "mapping.json", mapping)
         return {"mapping": mapping, "correspondence": correspondence, "summary": summary}
 
+    def _retain_native_mapping(self, stage, revision):
+        pointer = self._read_pointer() or {}
+        source = self.bundled_root
+        if (pointer.get("active") or {}).get("revision"):
+            source = resource_paths.resolve_paths(self.home)[0]
+        mapping = _read_json(source / "assets" / "native" / "mapping.json")
+        old = Catalog(source / "assets" / "recognition")
+        new = Catalog(stage / "assets" / "recognition")
+
+        def idols(root):
+            path = root / "runtime" / "node" / "upstream" / CATALOG_SOURCE_DIR / "p_idols.json"
+            return {row["id"]: row for row in _read_json(path)}
+
+        def identity(row, fields, effect=False):
+            if row is None:
+                return None
+            values = tuple(row.get(field) for field in fields)
+            if not effect:
+                return values
+            signature = simulator_signature(row)
+            if signature is None:
+                signature = tuple(row.get(field) for field in
+                                  ("effects", "actions", "conditions", "cost", "limit", "forceInitialHand"))
+            return (*values, signature)
+
+        def verify(ids, before, after, fields, *, effect=False, name_corrections=None):
+            for sim_id in set(ids):
+                previous = identity(before.get(sim_id), fields, effect)
+                current = identity(after.get(sim_id), fields, effect)
+                correction = (name_corrections or {}).get(sim_id)
+                if previous is not None and current is not None and correction == (previous[0], current[0]):
+                    previous = (current[0], *previous[1:])
+                if previous is None or previous != current:
+                    raise DataUpdateError(f"新目录中 ID {sim_id} 的身份或效果已变化，无法沿用旧映射。请进入游戏主界面导出主数据后重试。")
+
+        verify((sim_id for variants in mapping["cards"].values() for sim_id in variants.values()),
+               old.skill_cards, new.skill_cards, ("name", "upgraded"), name_corrections=CARD_NAME_CORRECTIONS)
+        verify(mapping["items"].values(), old.p_items, new.p_items, ("name", "upgraded", "mode"))
+        verify(mapping["idols"].values(), idols(source), idols(stage), ("title", "idolId"))
+        verify(mapping["customizations"].values(), old.customizations, new.customizations, ("name", "max"), effect=True)
+        provenance = mapping["provenance"]
+        provenance["retained_from_catalog_revision"] = provenance["catalog_revision"]
+        provenance["catalog_revision"] = revision
+        provenance["source"] = "retained verified mapping"
+        provenance.pop("game_master_snapshot", None)
+        return {"mapping": mapping, "summary": {"uses_existing_mapping": True}}
+
     def _read_bundled_mapping(self) -> dict:
         path = self.bundled_root / "assets" / "native" / "mapping.json"
         if not path.is_file():
@@ -1319,6 +1433,7 @@ class DataUpdater:
         # the immutable set came from the exact requested native source.
         provenance["master_revision"] = master_revision
         mapping["provenance"] = provenance
+        (stage / "assets" / "native").mkdir(parents=True, exist_ok=True)
         _atomic_write_json(stage / "assets" / "native" / "mapping.json", mapping)
 
         recognition = stage / "assets" / "recognition"
@@ -1516,8 +1631,6 @@ class DataUpdater:
     # -- verification ------------------------------------------------------
     def _verify_release(self, directory, revision: str, *, check_name: bool = True) -> dict:
         directory = Path(directory)
-        if check_name and directory.name != revision:
-            raise DataUpdateError("数据版本目录名与 revision 不一致。")
         manifest_path = directory / "release.json"
         if not manifest_path.is_file() or manifest_path.is_symlink():
             raise DataUpdateError(f"数据版本缺少 release.json：{directory}")
@@ -1533,6 +1646,9 @@ class DataUpdater:
         validation = record.get("validation")
         if not isinstance(validation, dict) or validation.get("status") != "passed":
             raise DataUpdateError("release.json 未记录通过验证，拒绝使用。")
+        snapshot = validation.get("game_master_snapshot")
+        if check_name and directory.name != resource_paths.release_directory_name(revision, snapshot):
+            raise DataUpdateError("数据版本目录名与 release.json 不一致。")
         listed = record.get("files")
         if not isinstance(listed, dict) or not listed:
             raise DataUpdateError("release.json 缺少文件清单。")
@@ -1546,4 +1662,5 @@ class DataUpdater:
                 raise DataUpdateError(f"release.json 哈希格式不正确：{rel}")
             if _sha256_file(path) != digest:
                 raise DataUpdateError(f"数据版本校验失败：{rel}")
-        return {"revision": revision, "release_manifest_sha256": hashlib.sha256(raw).hexdigest()}
+        return {"revision": revision, "game_master_snapshot": snapshot,
+                "release_manifest_sha256": hashlib.sha256(raw).hexdigest()}

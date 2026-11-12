@@ -388,7 +388,7 @@ class Launcher:
         self.events.put(('progress', None, str(text)))
 
     def _updater(self):
-        return DataUpdater(user_home=self.home, progress=self._data_progress)
+        return DataUpdater(user_home=self.home, progress=self._data_progress, game_master=True)
 
     def _apply_data_status(self):
         state = self._data_state
@@ -436,7 +436,9 @@ class Launcher:
 
     @staticmethod
     def _format_changes(changes):
-        return '将同步卡片、道具、赛季和模拟引擎，并更新回忆对应关系。'
+        if (changes or {}).get('uses_existing_mapping'):
+            return '将同步 GKTools 模拟数据和引擎，并检查现有回忆映射能否沿用。新回忆映射可在导出游戏主数据后更新。'
+        return '将从 GKTools 同步模拟数据和引擎，并用本机游戏导出的主数据更新回忆对应关系。'
 
     def _install_data(self, revision, master_revision):
         server = self._start_server()

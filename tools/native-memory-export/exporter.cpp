@@ -636,6 +636,7 @@ void SerializeItemIds(void* item, const Field& fids, RecBuf& rb) {
 // (never blocks) inside the existing memory readiness loop and reuses the same
 // 180s budget.
 #include "inventory-export.h"
+#include "game-master-export.h"
 
 // ---- worker -----------------------------------------------------------------
 
@@ -1009,6 +1010,7 @@ unsigned __stdcall ExportWorker(void*) {
     // out (including the catch paths above); there is no explicit detach here.
     gkdiag::Log().Checkpoint("result_write", res.status.c_str());
     WriteResults(res, gkdiag::Log().LastPhaseSummary(), true);
+    if (res.dataComplete) ExportGameMasterSnapshot(domain);
     finishInventoryAfterMemory();
     return 0;
 }

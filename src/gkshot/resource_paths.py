@@ -51,6 +51,16 @@ def pointer_path(project_root=None) -> Path:
     return releases_root(project_root) / ACTIVE_NAME
 
 
+def release_directory_name(revision, game_master_snapshot=None):
+    if not isinstance(revision, str) or not REVISION_PATTERN.fullmatch(revision):
+        raise ResourceError("数据版本的上游修订号不合法。")
+    if game_master_snapshot is None:
+        return revision
+    if not isinstance(game_master_snapshot, str) or not _SHA256_PATTERN.fullmatch(game_master_snapshot):
+        raise ResourceError("数据版本的游戏主数据校验值不合法。")
+    return f"{revision}-{game_master_snapshot[:16]}"
+
+
 def baseline_paths(project_root=None):
     """Return the bundled project resources (revision ``null``)."""
     root = Path(project_root) if project_root is not None else BUNDLED_ROOT
@@ -264,7 +274,8 @@ def resolve_paths(project_root=None):
         raise ResourceError(f"活动版本目录不在 runtime/releases 之内：{release}")
     if release.parent != releases:
         raise ResourceError(f"活动版本目录必须是 runtime/releases/<revision>：{release}")
-    if release.name != revision:
+    snapshot = active.get("game_master_snapshot")
+    if release.name != release_directory_name(revision, snapshot):
         raise ResourceError("活动版本目录名与指针中的 revision 不一致。")
     if _is_link(release_path) or not release.is_dir():
         raise ResourceError(f"活动版本目录不存在或是链接：{release}")
@@ -272,6 +283,8 @@ def resolve_paths(project_root=None):
     if not isinstance(expected, str) or not _SHA256_PATTERN.fullmatch(expected):
         raise ResourceError('活动版本指针缺少有效的 release_manifest_sha256。')
     record = _load_release_record(release, revision, expected)
+    if (record.get("validation") or {}).get("game_master_snapshot") != snapshot:
+        raise ResourceError("活动版本的游戏主数据与指针不一致。")
     files = _verify_inventory(release, record)
     _verify_manifest_revision(release, files, "assets/recognition", "assets/recognition/manifest.json", revision)
     _verify_manifest_revision(release, files, "runtime/node", "runtime/node/manifest.json", revision)

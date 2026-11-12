@@ -38,6 +38,8 @@ bubbles up to the caller unchanged.
 
 from __future__ import annotations
 
+import configparser
+
 import csv
 import hashlib
 import json
@@ -77,6 +79,10 @@ RECEIPT_SCHEMA_VERSION = 1
 KNOWN_PROTOTYPE_SHA256 = (
     "4c7cd711ef3ed0f92e4d1def1be54bd1e19076eaf92d600f3cfa52111ded70af"
 )
+KNOWN_PREVIOUS_VERSION_DLLS = {
+    "bd1d3153c6faf317d69de25f61fe3557093a0123441e10f8debd3bbe4f3d150f",
+    "5d041870e2f801d3b4f1e4bbf686752f4290d092314fec84c1bc2f06101e7a3f",
+}
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _STAGE_PREFIX = ".gkplugin-stage-"
@@ -220,6 +226,8 @@ class PluginManager:
         cfg_owned = cfg_present and self._cfg_is_owned(
             cfg_sha, expected_cfg_sha, receipt
         )
+        cfg_compatible = cfg_present and (cfg_sha == expected_cfg_sha or
+                                           self._cfg_points_to_export_dir(cfg_path.read_bytes()))
 
         analysis = self._analyze_selection(
             bundle, version_sha, version_owned, winhttp_sha, winhttp_owned
@@ -246,9 +254,9 @@ class PluginManager:
             )
             sha = version_sha if selected == VERSION_DLL_NAME else winhttp_sha
             owned = self._dll_owned(selected, sha, bundle, receipt)
-            if present and sha == expected and cfg_sha == expected_cfg_sha:
+            if present and sha == expected and cfg_compatible:
                 state = "installed"
-            elif present and owned and (not cfg_present or cfg_owned):
+            elif present and owned and (not cfg_present or cfg_owned or cfg_compatible):
                 state = "update_available"
             elif not present:
                 state = "not_installed"
@@ -257,7 +265,7 @@ class PluginManager:
                 if selected not in conflicts:
                     conflicts.append(selected)
 
-        if cfg_present and not cfg_owned:
+        if cfg_present and not (cfg_owned or cfg_compatible):
             state = "conflict"
             if CONFIG_NAME not in conflicts:
                 conflicts.append(CONFIG_NAME)
@@ -334,9 +342,8 @@ class PluginManager:
         )
         target_sha = version_sha if target_name == VERSION_DLL_NAME else winhttp_sha
 
-        if cfg_bytes is not None and not self._cfg_is_owned(
-            cfg_sha, expected_cfg_sha, receipt
-        ):
+        keep_cfg = cfg_bytes is not None and cfg_sha != expected_cfg_sha and self._cfg_points_to_export_dir(cfg_bytes)
+        if cfg_bytes is not None and not keep_cfg and not self._cfg_is_owned(cfg_sha, expected_cfg_sha, receipt):
             raise PluginError(
                 "游戏目录中已存在非本工具生成的 GKMemoryExport.ini，已拒绝覆盖：%s"
                 % cfg_path,
@@ -345,9 +352,9 @@ class PluginManager:
 
         already = (
             target_sha == target_expected_sha
-            and cfg_sha == expected_cfg_sha
+            and (cfg_sha == expected_cfg_sha or keep_cfg)
             and self._receipt_matches(
-                receipt, target_name, target_expected_sha, expected_cfg_sha
+                receipt, target_name, target_expected_sha, cfg_sha
             )
         )
         if already:
@@ -365,7 +372,7 @@ class PluginManager:
         backup_items = []
         if target_bytes is not None:
             backup_items.append((target_path, target_bytes))
-        if cfg_bytes is not None:
+        if cfg_bytes is not None and not keep_cfg:
             backup_items.append((cfg_path, cfg_bytes))
         self._backup_owned(game_root, backup_items)
 
@@ -375,15 +382,18 @@ class PluginManager:
                 game_root, (self.bundle_dir / target_name).read_bytes()
             )
             staged.append(staged_dll)
-            staged_cfg = self._stage_file(game_root, expected_cfg)
-            staged.append(staged_cfg)
+            if not keep_cfg:
+                staged_cfg = self._stage_file(game_root, expected_cfg)
+                staged.append(staged_cfg)
             os.replace(staged_dll, target_path)
-            os.replace(staged_cfg, cfg_path)
+            if not keep_cfg:
+                os.replace(staged_cfg, cfg_path)
             self._write_receipt(receipt_path, {
                 'schema_version': RECEIPT_SCHEMA_VERSION,
                 'game_dir': str(game_root), 'version': bundle.version,
                 'dll_name': target_name, 'dll_sha256': target_expected_sha,
-                'config_sha256': expected_cfg_sha,
+                'config_sha256': None if keep_cfg else expected_cfg_sha,
+                'preserved_config_sha256': cfg_sha if keep_cfg else None,
                 'export_dir': str(self.export_dir), 'installed_at': _now_iso(),
             })
         except BaseException:
@@ -393,7 +403,8 @@ class PluginManager:
                 except FileNotFoundError:
                     pass
             self._restore_file(target_path, target_bytes)
-            self._restore_file(cfg_path, cfg_bytes)
+            if not keep_cfg:
+                self._restore_file(cfg_path, cfg_bytes)
             raise
 
         result = self._result(
@@ -717,7 +728,7 @@ class PluginManager:
         if sha256 is None or name not in KNOWN_DLL_NAMES:
             return False
         if name == VERSION_DLL_NAME:
-            if sha256 == KNOWN_PROTOTYPE_SHA256:
+            if sha256 == KNOWN_PROTOTYPE_SHA256 or sha256 in KNOWN_PREVIOUS_VERSION_DLLS:
                 return True
             if bundle is not None and sha256 == bundle.sha256:
                 return True
@@ -739,9 +750,19 @@ class PluginManager:
         rec = self._receipt_dll(receipt)
         if rec is None or rec != (name, dll_sha):
             return False
-        return receipt.get("config_sha256") == cfg_sha
+        return cfg_sha in (receipt.get("config_sha256"), receipt.get("preserved_config_sha256"))
 
     # -- config -------------------------------------------------------------
+
+    def _cfg_points_to_export_dir(self, raw: bytes) -> bool:
+        try:
+            encoding = "utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+            config = configparser.ConfigParser(interpolation=None)
+            config.read_string(raw.decode(encoding))
+            target = Path(config.get(CONFIG_SECTION, "ExportDirectory"))
+            return target.is_absolute() and _realpath(target) == _realpath(self.export_dir)
+        except (configparser.Error, OSError, ValueError):
+            return False
 
     def _config_bytes(self) -> bytes:
         text = "[%s]\r\nExportDirectory=%s\r\n" % (
@@ -942,6 +963,28 @@ def _reg_value(key, name: str):
     return value
 
 
+def _dmm_player_game_dir() -> str | None:
+    roaming = os.environ.get("APPDATA")
+    if not roaming:
+        return None
+    try:
+        path = Path(roaming) / "dmmgameplayer5" / "dmmgame.cnf"
+        config = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    contents = config.get("contents") if isinstance(config, dict) else None
+    if not isinstance(contents, list):
+        return None
+    for entry in contents:
+        if not isinstance(entry, dict) or entry.get("productId") != "gakumas":
+            continue
+        detail = entry.get("detail")
+        directory = detail.get("path") if isinstance(detail, dict) else None
+        if isinstance(directory, str) and Path(directory).is_absolute() and _has_game_exe(directory):
+            return directory
+    return None
+
+
 def _dmm_install_locations() -> list:
     """Common DMM uninstall ``InstallLocation`` values (read-only)."""
     if os.name != "nt":
@@ -1029,8 +1072,8 @@ def _running_game_dir() -> str | None:
 def detect_game_dirs(user_home) -> list:
     """Return likely game directories without scanning whole drives.
 
-    Sources, in priority order: the saved ``settings.json`` ``game_dir``,
-    DMM uninstall registry ``InstallLocation`` values, and the directory of a
+    Sources, in priority order: the saved directory, DMM Player's installed
+    game list, DMM uninstall registry values, and the directory of a
     running ``gakumas.exe`` discovered through a read-only PowerShell query.
     """
     seen = set()
@@ -1053,6 +1096,7 @@ def detect_game_dirs(user_home) -> list:
         ordered.append(real)
 
     add(_settings_game_dir(user_home))
+    add(_dmm_player_game_dir())
     for location in _dmm_install_locations():
         add(location)
     add(_running_game_dir())
