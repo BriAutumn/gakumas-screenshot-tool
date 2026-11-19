@@ -16,6 +16,7 @@ from gkshot.native_photos import native_photo_preview
 from gkshot.simulation_rounds import POLICY as ROUND_POLICY, screen_rounds
 from gkshot.memory_library import validate_memory
 from gkshot.simulation import atomic_json, compare, compose_memories, native_memory_source
+from gkshot.skill_switches import legal_variants, switch_families
 
 
 def memory_records(library):
@@ -88,6 +89,7 @@ def enumerate_pairs(records, *, stage_id, support_bonus, catalog=None):
         raise ValueError('请选择普通竞技场场地')
     idols = pinned_idols(catalog)
     names = pinned_names()
+    families = switch_families(catalog.skill_cards)
     groups, rejected = defaultdict(list), []
     for record in records:
         try:
@@ -110,13 +112,20 @@ def enumerate_pairs(records, *, stage_id, support_bonus, catalog=None):
                 if main['id'] == sub['id']:
                     continue
                 loadout = compose_memories(main['draft'], sub['draft'], stage_id=stage_id,
-                    support_bonus=support_bonus, catalog=catalog, idols=idols)
-                candidate_id = hashlib.sha256((main['id'] + ':' + sub['id']).encode()).hexdigest()[:24]
-                def reference(r):
-                    return {k: v for k, v in r.items() if k != 'draft'}
-                candidates.append({'id': candidate_id, 'idol_id': idol_id, 'plan': plan,
-                    'idol_name': names.get(idol_id, f'角色 {idol_id}'),
-                    'main': reference(main), 'sub': reference(sub), 'loadout': loadout.to_dict()})
+                    support_bonus=support_bonus, catalog=catalog, idols=idols).to_dict()
+                pair_key = main['id'] + ':' + sub['id']
+                references = {side: {k: v for k, v in record.items() if k != 'draft'}
+                              for side, record in (('main', main), ('sub', sub))}
+                for variant, choices in legal_variants(loadout, families, catalog.skill_cards):
+                    key = pair_key
+                    if choices:
+                        key += ':' + json.dumps(variant['card_ids'], separators=(',', ':'))
+                    candidates.append({
+                        'id': hashlib.sha256(key.encode()).hexdigest()[:24],
+                        'idol_id': idol_id, 'plan': plan,
+                        'idol_name': names.get(idol_id, f'角色 {idol_id}'),
+                        **references, 'loadout': variant, 'switch_choices': choices,
+                    })
     return candidates, rejected
 
 
@@ -310,11 +319,12 @@ def run_search(folder, manifest, *, cancel, publish, cache=None, simulator=None,
     return state
 
 
-def ranking(manifest, state, *, phase='refine', view='total', idol_id=None):
+def ranking(manifest, state, *, phase='refine', view='total', idol_id=None, excluded=()):
     if phase not in ('screen', 'refine') or view not in ('total', 'characters'):
         raise ValueError('未知榜单')
     rows = [{**c, **state.get(phase, {}).get(c['id'], {})} for c in manifest['candidates']
-            if state.get(phase, {}).get(c['id'], {}).get('status') == 'ok' and (idol_id is None or c['idol_id'] == idol_id)]
+            if c['id'] not in excluded and state.get(phase, {}).get(c['id'], {}).get('status') == 'ok'
+            and (idol_id is None or c['idol_id'] == idol_id)]
     rows.sort(key=lambda r: (-r['summary']['mean'], r['id']))
     if view == 'characters':
         seen = set()

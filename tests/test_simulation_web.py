@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from gkshot.simulation_web import SimulationServer, launch
 from gkshot.models import Loadout
+from gkshot.simulation import atomic_json, summary
 
 
 class SimulationWebTests(unittest.TestCase):
@@ -114,6 +115,28 @@ class SimulationWebTests(unittest.TestCase):
         other = dict(self.loadout, stage_id=161)
         code, _ = self.request('/api/run', {'candidates':[{'name':'A','loadout':self.loadout},{'name':'B','loadout':other}],'trials':1,'seed':1})
         self.assertEqual(code, 400)
+
+    def test_legacy_switch_conflicts_are_hidden_and_cannot_resume(self):
+        search_id, invalid_id, valid_id = 'b'*32, 'c'*24, 'd'*24
+        loadout = dict(self.loadout, card_ids=[[431, 0, 0, 0, 0, 0], [774, 0, 0, 0, 0, 0]])
+        candidate = {'idol_id': 1, 'idol_name': 'test', 'id': invalid_id, 'loadout': loadout}
+        candidates = [candidate, dict(candidate, id=valid_id, loadout=self.loadout)]
+        results = {invalid_id: {'status': 'ok', 'summary': summary([200])},
+                   valid_id: {'status': 'ok', 'summary': summary([100])}}
+        try:
+            with tempfile.TemporaryDirectory() as folder, patch.object(self.server, 'search_root', Path(folder)):
+                search = Path(folder) / search_id
+                atomic_json(search/'manifest.json', {'config': {}, 'candidates': candidates, 'rejected': []})
+                atomic_json(search/'state.json', {'state': 'cancelled', 'screen': results, 'refine': results})
+                code, raw = self.request('/api/searches/' + search_id)
+                self.assertEqual(code, 200, raw)
+                data = json.loads(raw)
+                self.assertEqual(data['switch_conflict_count'], 1)
+                self.assertEqual([(r['id'], r['rank']) for r in data['rows']], [(valid_id, 1)])
+                self.assertEqual(self.request(f'/api/searches/{search_id}/refine/{invalid_id}')[0], 409)
+                self.assertEqual(self.request('/api/search/resume', {'search_id': search_id})[0], 400)
+        finally:
+            self.server.searches.pop(search_id, None)
 
     def test_search_http_lifecycle_and_rankings(self):
         from gkshot.simulation_search import enumerate_pairs

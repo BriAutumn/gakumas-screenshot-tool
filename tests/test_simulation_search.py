@@ -12,9 +12,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from gkshot.adapters.local_engine import LocalSimulator, SimulationCancelled
+from gkshot.catalog import Catalog
 from gkshot.models import Loadout
 from gkshot.simulation import atomic_json, summary
 from gkshot.simulation_search import POLICY_BALANCED, balanced_finalists, upgrade_screening_policy, POLICY_ADAPTIVE, adaptive_finalists, memory_records, memory_preview, enumerate_pairs, select_finalists, run_search, ranking
+from gkshot.skill_switches import legal_variants, switch_conflicts, switch_families
 
 
 class SearchTests(unittest.TestCase):
@@ -37,6 +39,40 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(rejected[0]['ordinal'],101)
         self.assertEqual(rows[0]['main']['ordinal'],12)
         self.assertEqual(enumerate_pairs([a,b], stage_id=161, support_bonus=0)[0],[])
+
+    def test_search_expands_both_switch_sides_with_independent_candidate_ids(self):
+        cards = Catalog().skill_cards
+        a, b = self.record('a', 10), self.record('b', 20)
+        for record, card_id in ((a, 431), (b, 774)):
+            record['draft'].update(p_idol_id=123, card_ids=[card_id, 0, 0, 0, 0, 0],
+                                   customizations=['2x1', '', '', '', '', ''], item_ids=[0]*4)
+        rows, rejected = enumerate_pairs([a, b], stage_id=162, support_bonus=.0472)
+        self.assertFalse(rejected)
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(len({row['id'] for row in rows}), 4)
+        for row in rows:
+            choice, = row['switch_choices']
+            kept, = choice['kept']
+            excluded, = choice['excluded']
+            self.assertEqual({kept['id'], excluded['id']}, {431, 774})
+            self.assertEqual(kept['name'], cards[kept['id']]['name'])
+            loadout = row['loadout']
+            self.assertEqual([card for group in loadout['card_ids'] for card in group if card], [kept['id']])
+            for group, tokens in zip(loadout['card_ids'], loadout['customizations']):
+                self.assertEqual(tokens, ['2x1' if card else '' for card in group])
+
+    def test_five_switch_groups_expand_to_32_unique_legal_decks(self):
+        cards = Catalog().skill_cards
+        families = switch_families(cards)[:5]
+        left, right = ([min(side) for side in group] + [0] for group in zip(*families))
+        loadout = {'card_ids': [left, right], 'customizations': [['']*6, ['']*6]}
+        variants = list(legal_variants(loadout, families, cards))
+        self.assertEqual(len(variants), 32)
+        self.assertEqual(len({tuple(map(tuple, row['card_ids'])) for row, _ in variants}), 32)
+        for row, choices in variants:
+            self.assertEqual(len(choices), 5)
+            self.assertFalse(switch_conflicts(row['card_ids'], families))
+            self.assertEqual(sum(bool(card) for group in row['card_ids'] for card in group), 5)
 
     def test_provenance_duplicate_hash_different_owned_copy(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -19,6 +19,7 @@ from gkshot.models import Loadout
 from gkshot.adapters.local_engine import LocalSimulator
 from gkshot.simulation_rounds import POLICY as ROUND_POLICY
 from gkshot.simulation_search import memory_records, memory_preview, enumerate_pairs, run_search, ranking, POLICY_ADAPTIVE, POLICY_BALANCED
+from gkshot.skill_switches import switch_conflicts, switch_families
 from gkshot.season_runs import (FINISHED as GROUP_FINISHED, ACTIVE as GROUP_ACTIVE,
     child_summary as season_child_summary, contest_seasons, new_group as season_new_group,
     run_group as season_run_group, season_stage_rows, validate_season)
@@ -91,6 +92,7 @@ class SimulationServer(ThreadingHTTPServer):
                 if path.parent.parent.name == 'processing' else f"{path.parent.name} / {path.name}")
 
     def load_searches(self):
+        families = None
         for path in sorted(self.search_root.glob('*/manifest.json'), key=lambda p: p.stat().st_mtime_ns):
             search_id = path.parent.name
             if not re.fullmatch(r'[a-f0-9]{32}', search_id) or search_id in self.searches:
@@ -101,7 +103,12 @@ class SimulationServer(ThreadingHTTPServer):
                 state = json.loads(saved.read_text(encoding='utf-8')) if saved.exists() else {}
                 if state.get('state') in (None, 'running'):
                     state['state'] = 'interrupted'
-                self.searches[search_id] = {'manifest': manifest, 'snapshot': state, 'cancel': threading.Event()}
+                if families is None:
+                    families = switch_families(self.catalog.skill_cards)
+                conflicts = {row['id'] for row in manifest['candidates']
+                             if switch_conflicts(row['loadout']['card_ids'], families)}
+                self.searches[search_id] = {'manifest': manifest, 'snapshot': state,
+                                            'cancel': threading.Event(), 'switch_conflicts': conflicts}
             except (OSError, ValueError):
                 continue
 
@@ -425,7 +432,10 @@ class Handler(BaseHTTPRequestHandler):
                     job = self.server.searches.get(match[1])
                     if job is None:
                         return self.send(404, {'error': '搜索不存在'})
+                    conflicts = job.get('switch_conflicts', ())
                     if match[2]:
+                        if match[3] in conflicts:
+                            return self.send(409, {'error': '此旧编成含互斥技能卡，请新建搜索重算。'})
                         root = self.server.search_root / match[1]
                         if match[2] == 'screen' and job['snapshot'].get('detail_round'):
                             trials = int(query.get('trials', [str(job['snapshot']['detail_round']*20)])[0])
@@ -443,7 +453,7 @@ class Handler(BaseHTTPRequestHandler):
                     view = query.get('view', ['total'])[0]
                     idol = int(query['idol'][0]) if query.get('idol', [''])[0] else None
                     offset = max(0, int(query.get('offset', ['0'])[0]))
-                    rows = ranking(manifest, state, phase=phase, view=view, idol_id=idol)
+                    rows = ranking(manifest, state, phase=phase, view=view, idol_id=idol, excluded=conflicts)
                     errors = [{'id': k, 'phase': p, 'error': v.get('error')} for p in ('screen', 'refine')
                               for k, v in state.get(p, {}).items() if v['status'] != 'ok']
                     return self.send(200, {'id': match[1], 'config': manifest['config'],
@@ -452,8 +462,12 @@ class Handler(BaseHTTPRequestHandler):
                         'total': state.get('total', len(manifest['candidates'])), 'pairs': len(manifest['candidates']),
                         'screen_done': sum(v['status'] == 'ok' for v in state.get('screen', {}).values()),
                         'refine_done': sum(v['status'] == 'ok' for v in state.get('refine', {}).values()),
-                        'round_history': state.get('round_history', []), 'screen_round': state.get('screen_round'), 'round_errors': state.get('round_errors', []), 'allocation': state.get('allocation', {}), 'selected': len(state.get('selected') or []), 'rejected': manifest['rejected'],
-                        'errors': errors, 'rows': rows[offset:offset + 50], 'row_count': len(rows)})
+                        'round_history': [] if conflicts else state.get('round_history', []),
+                        'screen_round': state.get('screen_round'), 'round_errors': state.get('round_errors', []),
+                        'allocation': {} if conflicts else state.get('allocation', {}),
+                        'selected': len(state.get('selected') or []), 'rejected': manifest['rejected'],
+                        'errors': errors, 'rows': rows[offset:offset + 50], 'row_count': len(rows),
+                        'switch_conflict_count': len(conflicts)})
             match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})', target.path)
             if match:
                 with self.server.guard:
@@ -534,6 +548,8 @@ class Handler(BaseHTTPRequestHandler):
                 child_job = self.server.searches.get(child['search_id'])
                 if child_job is None:
                     raise ValueError('缺少子任务记录，不能续跑')
+                if child_job.get('switch_conflicts'):
+                    raise ValueError('旧赛季任务含互斥技能卡，请新建赛季任务重算。')
                 if child_job['manifest']['identity'] != self.server.simulator_factory().identity():
                     raise ValueError('引擎版本发生变化，请新建赛季任务')
             for child in group['stages']:
@@ -609,7 +625,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not rows:
                     raise ValueError('本场没有可以配对的主副记忆')
                 if self.path.endswith('/preview'):
-                    return self.send(200, {'pairs': len(rows), 'characters': len({r['idol_id'] for r in rows}), 'rejected': rejected})
+                    return self.send(200, {'pairs': len(rows),
+                        'memory_pairs': len({(r['main']['id'], r['sub']['id']) for r in rows}),
+                        'characters': len({r['idol_id'] for r in rows}), 'rejected': rejected})
                 with self.server.guard:
                     self.server.load_groups()
                     if self.server.group_active():
@@ -645,6 +663,8 @@ class Handler(BaseHTTPRequestHandler):
                             return self.send(409, {'error': '请使用暂停三场轮转，子任务不能单独停止。'})
                         job['cancel'].set()
                     else:
+                        if job.get('switch_conflicts'):
+                            raise ValueError('旧搜索含互斥技能卡，请新建搜索重算。')
                         if self.server.group_active():
                             return self.send(409, {'error': '赛季轮转正在占用模拟，请先暂停后再单独继续。'})
                         if self.server.busy():
