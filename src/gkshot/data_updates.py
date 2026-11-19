@@ -394,16 +394,33 @@ def _encode_json_table(rows) -> bytes:
 
 
 def _validate_generated_table(table: str, rows) -> None:
-    """Validate keys in CSV tables, including the scoped IDs in descriptions."""
-    if not isinstance(rows, list) or not rows:
+    """Validate keys in CSV tables, including tables with composite keys."""
+    idol_road_key = {
+        "idol_road_effects": "recommendedEffect",
+        "idol_road_stages": "idolId",
+    }.get(table)
+    if not isinstance(rows, list) or (not rows and idol_road_key is None):
         raise DataUpdateError(f"CSV 表 {table} 未产生任何数据行。")
     seen = set()
     for row in rows:
         if not isinstance(row, dict):
             raise DataUpdateError(f"CSV 表 {table} 含非对象行。")
-        entity_id = row.get("id")
+        entity_id = row.get("stageId" if idol_road_key else "id")
         if isinstance(entity_id, bool) or not isinstance(entity_id, int) or entity_id <= 0:
             raise DataUpdateError(f"CSV 表 {table} 含非法 ID：{entity_id!r}")
+        if idol_road_key:
+            qualifier = row.get(idol_road_key)
+            if idol_road_key == "idolId":
+                valid = type(qualifier) is int and qualifier > 0
+            else:
+                valid = isinstance(qualifier, str) and bool(qualifier) and qualifier == qualifier.strip()
+            if not valid:
+                raise DataUpdateError(f"CSV 表 {table} 含非法 {idol_road_key}：{qualifier!r}")
+            key = (entity_id, qualifier)
+            if key in seen:
+                raise DataUpdateError(f"CSV 表 {table} 含重复 stageId + {idol_road_key}：{entity_id}, {qualifier}")
+            seen.add(key)
+            continue
         if table == "descriptions":
             entity_type = row.get("type")
             if not isinstance(entity_type, str) or not entity_type or entity_type != entity_type.strip():
