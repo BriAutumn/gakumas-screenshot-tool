@@ -623,6 +623,36 @@ class CsvOnlySourceTests(DataUpdateTestBase):
         for name in CSV_FIELDS:
             self.assertEqual((csv_dir / (name + ".csv")).read_bytes(), files[f"{CSV_DIR}/{name}.csv"])
 
+    def test_header_only_idol_road_tables_allow_activation(self):
+        files = csv_source_files()
+        files[f"{CSV_DIR}/idol_road_effects.csv"] = b"stageId,recommendedEffect,effects\n"
+        files[f"{CSV_DIR}/idol_road_stages.csv"] = b"stageId,idolId,criteria,turnCounts,firstTurns\n"
+
+        self.updater(client=FakeClient(files)).install(REV, MREV)
+
+        for table in ("idol_road_effects", "idol_road_stages"):
+            self.assertEqual((self.upstream_json_dir(REV) / f"{table}.json").read_bytes(), b"[]")
+        self.assertTrue(self.pointer_path().exists())
+
+    def test_idol_road_tables_use_composite_keys(self):
+        examples = {
+            "idol_road_effects": (
+                {"stageId": 1, "recommendedEffect": "focus"},
+                {"stageId": 1, "recommendedEffect": "motivation"},
+            ),
+            "idol_road_stages": (
+                {"stageId": 1, "idolId": 1},
+                {"stageId": 1, "idolId": 2},
+            ),
+        }
+        for table, (first, second) in examples.items():
+            with self.subTest(table=table):
+                du._validate_generated_table(table, [first, second])
+                with self.assertRaisesRegex(DataUpdateError, "重复"):
+                    du._validate_generated_table(table, [first, first])
+        with self.assertRaisesRegex(DataUpdateError, "未产生任何数据行"):
+            du._validate_generated_table("skill_cards", [])
+
     def test_description_csv_keeps_records_that_share_an_entity_id(self):
         files = csv_source_files()
         files[f"{CSV_DIR}/descriptions.csv"] = (
